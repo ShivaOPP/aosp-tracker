@@ -110,6 +110,43 @@ Any user on the system can configure their own settings:
 aosp-tracker profile --name "Rei 陈丽" --emoji "❄️" --chat-id "6340997509"
 ```
 
+### Multi-Server Setup (Primary + Worker Nodes)
+
+Track multiple build servers concurrently with a single Telegram Bot:
+
+* **Primary Server (Server 1)** listens for Telegram slash commands (`/status`, `/roms`, etc.) and polls peer nodes.
+* **Worker Server (Server 2)** monitors local builds/syncs, sends notifications with server tags, and serves an internal status API.
+
+**Server 1 (Primary) `/etc/aosp_bot/config.json`:**
+```json
+{
+  "server_name": "Server 1 (India)",
+  "listen_for_commands": true,
+  "enable_api": true,
+  "api_port": 8088,
+  "secret_key": "YOUR_SHARED_SECRET_KEY",
+  "peer_servers": [
+    {
+      "name": "Server 2",
+      "url": "http://137.23.44.237:8088/status",
+      "secret_key": "YOUR_SHARED_SECRET_KEY"
+    }
+  ]
+}
+```
+
+**Server 2 (Worker) `/etc/aosp_bot/config.json`:**
+```json
+{
+  "server_name": "Server 2",
+  "listen_for_commands": false,
+  "enable_api": true,
+  "api_port": 8088,
+  "secret_key": "YOUR_SHARED_SECRET_KEY",
+  "peer_servers": []
+}
+```
+
 ---
 
 ## CLI Usage

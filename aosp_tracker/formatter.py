@@ -102,6 +102,7 @@ def format_build_in_progress(
     build_type: str,
     release: str,
     system_stats: Optional[Dict[str, Any]] = None,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format the Build In Progress Telegram message in HTML."""
     if system_stats is None:
@@ -115,6 +116,8 @@ def format_build_in_progress(
 
     hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
 
+    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
+
     sys_block = ""
     if system_stats:
         sys_block = (
@@ -127,6 +130,7 @@ def format_build_in_progress(
     return (
         f"{hidden_preview}⚙️ Build In Progress ({current_actions} tasks running) for {html.escape(rom_title)} on {html.escape(device)}\n"
         f"👤 User: {html.escape(user_name)}             {user_emoji}\n"
+        f"{server_line}"
         f"📊 Progress: [{bar}] {pct:.2f}%\n"
         f"   Actions: {actions_str}\n"
         f"⏳ Elapsed: {elapsed_str}\n"
@@ -155,6 +159,7 @@ def format_build_completed(
     release: str,
     artifacts: List[Dict[str, Any]],
     system_stats: Optional[Dict[str, Any]] = None,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format the Build Completed Telegram message in HTML."""
     if system_stats is None:
@@ -167,10 +172,14 @@ def format_build_completed(
     lines = [
         f"{hidden_preview}✅ Build Completed for {html.escape(rom_title)} on {html.escape(device)}",
         f"User: {html.escape(user_name)}             {user_emoji}",
+    ]
+    if server_name:
+        lines.append(f"🖥️ Server: <b>{html.escape(server_name)}</b>")
+    lines.extend([
         f"Started: {started_str}",
         f"Duration: {duration_str}",
         f"📊 Build Stats: {finished_actions}/{total_actions} actions",
-    ]
+    ])
 
     if system_stats:
         lines.append(f"💾 NVMe Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
@@ -206,15 +215,18 @@ def format_build_failed(
     build_type: str,
     release: str,
     error_summary: str,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format Build Failed Telegram message in HTML."""
     started_str = format_started_timestamp(start_time_epoch)
     duration_str = format_duration(duration_seconds)
     hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     return (
         f"{hidden_preview}❌ Build Failed for {html.escape(rom_title)} on {html.escape(device)}\n"
         f"User: {html.escape(user_name)}             {user_emoji}\n"
+        f"{server_line}"
         f"Started: {started_str}\n"
         f"Duration: {duration_str}\n"
         f"📊 Actions: {finished_actions}/{total_actions} actions\n"
@@ -239,6 +251,7 @@ def format_sync_in_progress(
     branch: str,
     remote: str,
     system_stats: Optional[Dict[str, Any]] = None,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format Source Sync In Progress Telegram message in HTML."""
     if system_stats is None:
@@ -249,6 +262,7 @@ def format_sync_in_progress(
     elapsed_str = format_duration(elapsed_seconds)
     eta_str = format_duration(eta_seconds) if eta_seconds is not None else "Calculating..."
     hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     sys_block = ""
     if system_stats:
@@ -262,6 +276,7 @@ def format_sync_in_progress(
     return (
         f"{hidden_preview}🔄 Source Sync In Progress for {html.escape(rom_title)}\n"
         f"👤 User: {html.escape(user_name)}             {user_emoji}\n"
+        f"{server_line}"
         f"📊 Progress: [{bar}] {pct:.2f}%\n"
         f"   Projects: {synced_projects}/{total_projects}\n"
         f"⏳ Elapsed: {elapsed_str}\n"
@@ -283,15 +298,18 @@ def format_sync_completed(
     total_projects: int,
     branch: str,
     remote: str,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format Source Sync Completed Telegram message in HTML."""
     started_str = format_started_timestamp(start_time_epoch)
     duration_str = format_duration(duration_seconds)
     hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     return (
         f"{hidden_preview}✅ Source Sync Completed for {html.escape(rom_title)}\n"
         f"User: {html.escape(user_name)}             {user_emoji}\n"
+        f"{server_line}"
         f"Started: {started_str}\n"
         f"Duration: {duration_str}\n"
         f"📊 Sync Stats: {total_projects}/{total_projects} projects synced\n"
@@ -496,6 +514,7 @@ def format_kernel_build_in_progress(
     localversion: str,
     compiler_str: str = "Clang / LLVM",
     system_stats: Optional[Dict[str, Any]] = None,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format Kernel Build In Progress message in HTML."""
     if system_stats is None:
@@ -505,6 +524,7 @@ def format_kernel_build_in_progress(
     elapsed_str = format_duration(elapsed_seconds)
     eta_str = format_duration(eta_seconds) if eta_seconds is not None else "Calculating..."
     hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     sys_block = ""
     if system_stats:
@@ -528,6 +548,7 @@ def format_kernel_build_in_progress(
     return (
         f"{hidden_preview}⚙️ <b>Kernel Build In Progress ({active_tasks} tasks running) for {html.escape(kernel_title)} on {dev_label}</b>\n"
         f"👤 User: {html.escape(user_name)}             {user_emoji}\n"
+        f"{server_line}"
         f"📊 Progress: [{bar}] {pct:.2f}%\n"
         f"   Objects: {compiled_objects}/{total_objects} compiled\n"
         f"⏳ Elapsed: {elapsed_str}\n"
@@ -553,6 +574,7 @@ def format_kernel_build_completed(
     artifacts: List[Dict[str, Any]],
     download_url: Optional[str] = None,
     system_stats: Optional[Dict[str, Any]] = None,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format Kernel Build Completed message in HTML."""
     if system_stats is None:
@@ -566,10 +588,14 @@ def format_kernel_build_completed(
     lines = [
         f"{hidden_preview}✅ <b>Kernel Build Completed for {html.escape(kernel_title)} on {dev_label}</b>",
         f"User: {html.escape(user_name)}             {user_emoji}",
+    ]
+    if server_name:
+        lines.append(f"🖥️ Server: <b>{html.escape(server_name)}</b>")
+    lines.extend([
         f"Started: {started_str}",
         f"Duration: {duration_str}",
         f"📊 Build Stats: {total_objects}/{total_objects} objects compiled",
-    ]
+    ])
 
     if system_stats:
         lines.append(f"💾 NVMe Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
@@ -608,16 +634,19 @@ def format_kernel_build_failed(
     total_objects: int,
     kernel_version: str,
     error_summary: str,
+    server_name: Optional[str] = None,
 ) -> str:
     """Format Kernel Build Failed message in HTML."""
     started_str = format_started_timestamp(start_time_epoch)
     duration_str = format_duration(duration_seconds)
     hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
     dev_label = html.escape(device)
+    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     return (
         f"{hidden_preview}❌ <b>Kernel Build Failed for {html.escape(kernel_title)} on {dev_label}</b>\n"
         f"User: {html.escape(user_name)}             {user_emoji}\n"
+        f"{server_line}"
         f"Started: {started_str}\n"
         f"Duration: {duration_str}\n"
         f"📊 Build Stats: {compiled_objects}/{total_objects} objects compiled\n"
@@ -647,3 +676,85 @@ def make_kernel_completed_keyboard(download_url: Optional[str] = None) -> Dict[s
         }
     ])
     return {"inline_keyboard": buttons}
+
+
+def format_server_status_block(
+    server_name: str,
+    system_stats: Optional[Dict[str, Any]],
+    builds: List[Dict[str, Any]],
+    kernels: List[Dict[str, Any]],
+    syncs: List[Dict[str, Any]],
+    online: bool = True,
+    error: Optional[str] = None,
+) -> str:
+    """Format single server status card block."""
+    if not online:
+        err_msg = error or "Connection timed out"
+        return (
+            f"🖥️ <b>{html.escape(server_name)}</b> 🔴 <i>(Offline / Unreachable)</i>\n"
+            f"  ⚠️ <i>{html.escape(err_msg)}</i>"
+        )
+
+    lines = [f"🖥️ <b>{html.escape(server_name)}</b> 🟢"]
+    if system_stats:
+        lines.extend([
+            f"💻 <b>System Resources:</b>",
+            f"  • CPU: {system_stats.get('cpu_pct', 0.0):.1f}%",
+            f"  • RAM: {system_stats.get('ram_used_gb', 0.0):.1f} / {system_stats.get('ram_total_gb', 0.0):.1f} GB ({system_stats.get('ram_pct', 0.0):.1f}%)",
+            f"  • NVMe: {system_stats.get('disk_used_gb', 0.0):.1f} / {system_stats.get('disk_total_gb', 0.0):.1f} GB ({system_stats.get('disk_pct', 0.0):.1f}%)\n",
+        ])
+
+    active_build_count = len(builds)
+    if active_build_count > 0:
+        lines.append(f"⚙️ <b>Active ROM Builds ({active_build_count}):</b>")
+        for b in builds:
+            pct_val = b.get("pct", -1.0)
+            pct_str = f"{pct_val:.1f}%" if pct_val >= 0 else "compiling"
+            lines.append(f"  • {html.escape(str(b.get('rom_title', 'ROM')))} ({html.escape(str(b.get('device', 'device')))}) — {pct_str} [PID {b.get('pid')}]")
+    else:
+        lines.append("⚙️ <b>Active ROM Builds:</b> None running")
+
+    active_kernel_count = len(kernels)
+    if active_kernel_count > 0:
+        lines.append(f"\n⚡ <b>Active Kernel Builds ({active_kernel_count}):</b>")
+        for k in kernels:
+            pct_val = k.get("pct", -1.0)
+            pct_str = f"{pct_val:.1f}%" if pct_val >= 0 else "compiling"
+            lines.append(f"  • {html.escape(str(k.get('kernel_title', 'Kernel')))} ({html.escape(str(k.get('device', 'device')))}) — {pct_str} [PID {k.get('pid')}]")
+    else:
+        lines.append("⚡ <b>Active Kernel Builds:</b> None running")
+
+    active_sync_count = len(syncs)
+    if active_sync_count > 0:
+        lines.append(f"\n🔄 <b>Active Source Syncs ({active_sync_count}):</b>")
+        for s in syncs:
+            tot = s.get("total_projects", 0)
+            synced = s.get("synced_projects", 0)
+            pct = (synced / tot * 100.0) if tot > 0 else 0.0
+            lines.append(f"  • {html.escape(str(s.get('rom_title', 'ROM')))} ({html.escape(str(s.get('branch', 'default')))}) — {pct:.1f}% ({synced}/{tot} projects) [PID {s.get('pid')}]")
+    else:
+        lines.append("🔄 <b>Active Source Syncs:</b> None running")
+
+    return "\n".join(lines)
+
+
+def format_multi_server_status(servers: List[Dict[str, Any]]) -> str:
+    """Format combined status across multiple servers."""
+    header = f"📊 <b>AOSP Tracker Server Status ({len(servers)} Nodes)</b>\n"
+    blocks = []
+    for s in servers:
+        block = format_server_status_block(
+            server_name=s.get("server_name", "Unknown Server"),
+            system_stats=s.get("system_stats"),
+            builds=s.get("builds", []),
+            kernels=s.get("kernels", []),
+            syncs=s.get("syncs", []),
+            online=s.get("online", True),
+            error=s.get("error"),
+        )
+        blocks.append(block)
+
+    body = "\n\n────────────────────\n\n".join(blocks)
+    footer = "\n\n💡 <i>Send /roms or /kernels to browse releases.</i>"
+    return f"{header}\n{body}{footer}"
+

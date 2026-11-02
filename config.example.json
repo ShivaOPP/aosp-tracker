@@ -4,6 +4,18 @@
   "default_theme": "midnightBloom",
   "poll_interval": 5.0,
   "update_interval": 10.0,
+  "server_name": "Server 1 (India)",
+  "listen_for_commands": true,
+  "enable_api": true,
+  "api_port": 8088,
+  "secret_key": "YOUR_SHARED_SECRET_KEY",
+  "peer_servers": [
+    {
+      "name": "Server 2",
+      "url": "http://137.23.44.237:8088/status",
+      "secret_key": "YOUR_SHARED_SECRET_KEY"
+    }
+  ],
   "users": {
     "ubuntu": {
       "name": "Rei 陈丽",

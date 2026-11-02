@@ -12,6 +12,9 @@ import time
 import logging
 import asyncio
 import threading
+import socket
+import urllib.request
+import urllib.error
 from typing import Dict, Any, Optional, List, Tuple
 import psutil
 
@@ -23,6 +26,7 @@ from .artifacts import discover_artifacts, format_file_size
 from .telegram_client import TelegramClient
 from .sync_tracker import RepoSyncSession
 from .kernel_tracker import KernelBuildSession
+from .api_server import StatusServer
 from .formatter import (
     get_system_stats,
     format_build_in_progress,
@@ -41,6 +45,8 @@ from .formatter import (
     format_kernel_build_completed,
     format_kernel_build_failed,
     make_kernel_completed_keyboard,
+    format_server_status_block,
+    format_multi_server_status,
 )
 from .rom_scanner import scan_all_roms, get_rom_by_id
 from .gofile import upload_artifacts_batch
@@ -152,8 +158,22 @@ class AospMonitor:
         self.hidden_users = {str(u).lower().strip() for u in configured_hidden}
         self.hidden_users.add("xlmost")
         self.hidden_user_target_chat_id = str(self.global_config.get("hidden_user_target_chat_id", "6340997509"))
+        self.server_name = self.global_config.get("server_name")
+        self.listen_for_commands = bool(self.global_config.get("listen_for_commands", True))
+        self.secret_key = str(self.global_config.get("secret_key", "")).strip()
+        self.peer_servers = self.global_config.get("peer_servers", [])
         self.poll_interval = float(self.global_config.get("poll_interval", 5.0))
         self.update_interval = float(self.global_config.get("update_interval", 10.0))
+
+        # Multi-server / Worker configuration
+        self.server_name = self.global_config.get("server_name")
+        self.listen_for_commands = bool(self.global_config.get("listen_for_commands", True))
+        self.enable_api = bool(self.global_config.get("enable_api", True))
+        self.api_host = str(self.global_config.get("api_host", "0.0.0.0"))
+        self.api_port = int(self.global_config.get("api_port", 8088))
+        self.secret_key = str(self.global_config.get("secret_key", "")).strip()
+        self.peer_servers = self.global_config.get("peer_servers", [])
+        self.status_server: Optional[StatusServer] = None
 
         # Active sessions
         self.active_builds: Dict[int, BuildSession] = {}
@@ -330,6 +350,10 @@ class AospMonitor:
         self.hidden_users = {str(u).lower().strip() for u in configured_hidden}
         self.hidden_users.add("xlmost")
         self.hidden_user_target_chat_id = str(self.global_config.get("hidden_user_target_chat_id", "6340997509"))
+        self.server_name = self.global_config.get("server_name")
+        self.listen_for_commands = bool(self.global_config.get("listen_for_commands", True))
+        self.secret_key = str(self.global_config.get("secret_key", "")).strip()
+        self.peer_servers = self.global_config.get("peer_servers", [])
 
     def is_hidden_rom_or_user(
         self,
@@ -717,6 +741,7 @@ class AospMonitor:
             build_type=session.build_type,
             release=session.release,
             system_stats=sys_stats,
+            server_name=self.server_name,
         )
 
         if session.message_id is None:
@@ -850,6 +875,7 @@ class AospMonitor:
                 release=session.release,
                 artifacts=artifacts,
                 system_stats=get_system_stats(product_dir),
+                server_name=self.server_name,
             )
             logger.info("Build PID %d succeeded! Found %d artifacts.", session.pid, len(artifacts))
 
@@ -888,6 +914,7 @@ class AospMonitor:
                 build_type=session.build_type,
                 release=session.release,
                 error_summary=error_summary,
+                server_name=self.server_name,
             )
             logger.warning("Build PID %d failed: %s", session.pid, error_summary[:100])
 
@@ -965,6 +992,7 @@ class AospMonitor:
             branch=session.branch,
             remote=session.remote_url,
             system_stats=get_system_stats(session.repo_dir),
+            server_name=self.server_name,
         )
 
         if session.message_id is None:
@@ -1032,6 +1060,7 @@ class AospMonitor:
             total_projects=session.total_projects,
             branch=session.branch,
             remote=session.remote_url,
+            server_name=self.server_name,
         )
 
         self.telegram.edit_message(
@@ -1084,6 +1113,7 @@ class AospMonitor:
             localversion=session.localversion,
             compiler_str=session.compiler_str,
             system_stats=get_system_stats(session.kernel_dir),
+            server_name=self.server_name,
         )
 
         if session.message_id is None:
@@ -1174,6 +1204,7 @@ class AospMonitor:
                 artifacts=artifacts,
                 download_url=download_url,
                 system_stats=get_system_stats(session.kernel_dir),
+                server_name=self.server_name,
             )
             kb = make_kernel_completed_keyboard(download_url)
             if session.message_id:
@@ -1236,6 +1267,7 @@ class AospMonitor:
                     total_objects=session.total_objects,
                     kernel_version=session.kernel_version,
                     error_summary=error_summary,
+                    server_name=self.server_name,
                 )
                 self.telegram.edit_message(
                     chat_id=session.chat_id,
@@ -1424,6 +1456,100 @@ class AospMonitor:
         finally:
             self.active_uploads.pop(upload_id, None)
 
+    def get_local_status(self, is_allowed_hidden: bool = True) -> Dict[str, Any]:
+        """Collect local server resources and active sessions."""
+        if is_allowed_hidden:
+            builds = self.active_builds
+            kernels = self.active_kernels
+            syncs = self.active_syncs
+        else:
+            builds = {
+                pid: s for pid, s in self.active_builds.items()
+                if not self.is_hidden_rom_or_user(s.username, s.rom_title, getattr(s, "build_dir", None))
+            }
+            kernels = {
+                pid: s for pid, s in self.active_kernels.items()
+                if not self.is_hidden_rom_or_user(s.username, s.kernel_title, getattr(s, "kernel_dir", None))
+            }
+            syncs = {
+                pid: s for pid, s in self.active_syncs.items()
+                if not self.is_hidden_rom_or_user(s.username, s.rom_title, getattr(s, "repo_dir", None))
+            }
+
+        return {
+            "server_name": self.server_name or socket.gethostname(),
+            "online": True,
+            "system_stats": get_system_stats(),
+            "builds": [
+                {
+                    "pid": pid,
+                    "rom_title": s.rom_title,
+                    "device": s.device,
+                    "username": s.username,
+                    "pct": s.last_pct,
+                    "is_hidden": self.is_hidden_rom_or_user(s.username, s.rom_title, getattr(s, "build_dir", None)),
+                }
+                for pid, s in builds.items()
+            ],
+            "kernels": [
+                {
+                    "pid": pid,
+                    "kernel_title": s.kernel_title,
+                    "device": s.device_display,
+                    "username": s.username,
+                    "pct": s.last_pct,
+                    "is_hidden": self.is_hidden_rom_or_user(s.username, s.kernel_title, getattr(s, "kernel_dir", None)),
+                }
+                for pid, s in kernels.items()
+            ],
+            "syncs": [
+                {
+                    "pid": pid,
+                    "rom_title": s.rom_title,
+                    "branch": s.branch,
+                    "username": s.username,
+                    "synced_projects": s.count_synced_projects() if hasattr(s, "count_synced_projects") else 0,
+                    "total_projects": s.total_projects,
+                    "is_hidden": self.is_hidden_rom_or_user(s.username, s.rom_title, getattr(s, "repo_dir", None)),
+                }
+                for pid, s in syncs.items()
+            ],
+        }
+
+    async def fetch_peer_status(self, peer: Dict[str, Any], is_allowed_hidden: bool = True) -> Dict[str, Any]:
+        """Fetch status JSON from a peer server asynchronously."""
+        def _fetch():
+            url = peer.get("url", "")
+            name = peer.get("name") or url
+            secret = peer.get("secret_key", "")
+            req = urllib.request.Request(url)
+            if secret:
+                req.add_header("X-AOSP-Secret", secret)
+            try:
+                with urllib.request.urlopen(req, timeout=3.5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    data["online"] = True
+                    if not data.get("server_name"):
+                        data["server_name"] = name
+                    return data
+            except Exception as e:
+                logger.warning("Peer %s (%s) unreachable: %s", name, url, e)
+                return {
+                    "server_name": name,
+                    "online": False,
+                    "error": str(e),
+                    "builds": [],
+                    "kernels": [],
+                    "syncs": [],
+                }
+
+        result = await asyncio.to_thread(_fetch)
+        if not is_allowed_hidden and result.get("online"):
+            result["builds"] = [b for b in result.get("builds", []) if not b.get("is_hidden")]
+            result["kernels"] = [k for k in result.get("kernels", []) if not k.get("is_hidden")]
+            result["syncs"] = [s for s in result.get("syncs", []) if not s.get("is_hidden")]
+        return result
+
     async def handle_telegram_message(self, msg: Dict[str, Any]):
         """Handle incoming chat messages and slash commands."""
         chat = msg.get("chat", {})
@@ -1493,67 +1619,19 @@ class AospMonitor:
 
         elif cmd == "/status":
             is_allowed_hidden = (chat_id == self.hidden_user_target_chat_id or from_id == self.hidden_user_target_chat_id)
-            if is_allowed_hidden:
-                user_builds = self.active_builds
-                user_kernels = self.active_kernels
-                user_syncs = self.active_syncs
+            local_summary = self.get_local_status(is_allowed_hidden=is_allowed_hidden)
+
+            if self.peer_servers:
+                peer_results = await asyncio.gather(*[
+                    self.fetch_peer_status(peer, is_allowed_hidden=is_allowed_hidden)
+                    for peer in self.peer_servers
+                ])
+                all_servers = [local_summary] + list(peer_results)
             else:
-                user_builds = {
-                    pid: s for pid, s in self.active_builds.items()
-                    if not self.is_hidden_rom_or_user(s.username, s.rom_title, getattr(s, "build_dir", None))
-                }
-                user_kernels = {
-                    pid: s for pid, s in self.active_kernels.items()
-                    if not self.is_hidden_rom_or_user(s.username, s.kernel_title, getattr(s, "kernel_dir", None))
-                }
-                user_syncs = {
-                    pid: s for pid, s in self.active_syncs.items()
-                    if not self.is_hidden_rom_or_user(s.username, s.rom_title, getattr(s, "repo_dir", None))
-                }
-            title_scope = "Server Status"
+                all_servers = [local_summary]
 
-            active_build_count = len(user_builds)
-            active_kernel_count = len(user_kernels)
-            active_sync_count = len(user_syncs)
-            stats = get_system_stats()
-            lines = [
-                f"📊 <b>AOSP Tracker {title_scope}</b>\n",
-                f"💻 <b>System Resources:</b>",
-                f"  • CPU: {stats['cpu_pct']:.1f}%",
-                f"  • RAM: {stats['ram_used_gb']:.1f} / {stats['ram_total_gb']:.1f} GB ({stats['ram_pct']:.1f}%)",
-                f"  • NVMe: {stats['disk_used_gb']:.1f} / {stats['disk_total_gb']:.1f} GB ({stats['disk_pct']:.1f}%)\n",
-            ]
-
-            if active_build_count > 0:
-                lines.append(f"⚙️ <b>Active ROM Builds ({active_build_count}):</b>")
-                for pid, s in user_builds.items():
-                    pct = f"{s.last_pct:.1f}%" if s.last_pct >= 0 else "compiling"
-                    lines.append(f"  • {s.rom_title} ({s.device}) — {pct} [PID {pid}]")
-            else:
-                lines.append("⚙️ <b>Active ROM Builds:</b> None running")
-
-            if active_kernel_count > 0:
-                lines.append(f"\n⚡ <b>Active Kernel Builds ({active_kernel_count}):</b>")
-                for pid, s in user_kernels.items():
-                    pct = f"{s.last_pct:.1f}%" if s.last_pct >= 0 else "compiling"
-                    lines.append(f"  • {s.kernel_title} ({s.device_display}) — {pct} [PID {pid}]")
-            else:
-                lines.append("⚡ <b>Active Kernel Builds:</b> None running")
-
-            if active_sync_count > 0:
-                lines.append(f"\n🔄 <b>Active Source Syncs ({active_sync_count}):</b>")
-                for pid, s in user_syncs.items():
-                    try:
-                        synced = s.count_synced_projects()
-                        pct = (synced / s.total_projects * 100.0) if s.total_projects > 0 else 0.0
-                        lines.append(f"  • {s.rom_title} ({s.branch}) — {pct:.1f}% ({synced}/{s.total_projects} projects) [PID {pid}]")
-                    except Exception:
-                        lines.append(f"  • {s.rom_title} ({s.branch}) [PID {pid}]")
-            else:
-                lines.append("🔄 <b>Active Source Syncs:</b> None running")
-
-            lines.append("\n💡 <i>Send /roms or /kernels to browse releases.</i>")
-            self.telegram.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+            status_text = format_multi_server_status(all_servers)
+            self.telegram.send_message(chat_id, status_text, parse_mode="HTML")
 
         elif cmd == "/help":
             help_text = (
@@ -1793,9 +1871,27 @@ class AospMonitor:
             await asyncio.sleep(self.poll_interval)
 
     async def run(self):
-        """Main async daemon runner with concurrent monitoring and Telegram polling."""
-        logger.info("AOSP Tracker Daemon started. Monitoring builds, syncs, and Telegram commands...")
-        await asyncio.gather(
-            self.monitor_loop(),
-            self.poll_telegram_updates(),
-        )
+        """Main async daemon runner with concurrent monitoring, Status API, and Telegram polling."""
+        node_name = self.server_name or socket.gethostname()
+        logger.info("AOSP Tracker Daemon started on node %s.", node_name)
+
+        if self.enable_api:
+            self.status_server = StatusServer(
+                host=self.api_host,
+                port=self.api_port,
+                get_status_callback=lambda: self.get_local_status(is_allowed_hidden=True),
+                secret_key=self.secret_key,
+            )
+            self.status_server.start()
+
+        tasks = [self.monitor_loop()]
+        if self.listen_for_commands:
+            tasks.append(self.poll_telegram_updates())
+        else:
+            logger.info("Worker mode: Telegram update polling disabled (node will push notifications only).")
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            if self.status_server:
+                self.status_server.stop()
