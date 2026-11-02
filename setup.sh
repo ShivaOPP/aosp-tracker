@@ -5,6 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== Installing AOSP Telegram Tracker ==="
 
+# 0. Check and install dependencies
+if ! python3 -c "import psutil" >/dev/null 2>&1; then
+    echo "Installing python3-psutil dependency..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq python3-psutil
+fi
+
 # 1. Install CLI binary symlinks
 sudo ln -sf "${SCRIPT_DIR}/bin/aosp-tracker" /usr/local/bin/aosp-tracker
 sudo ln -sf "${SCRIPT_DIR}/bin/aosp-tracker" /usr/local/bin/aosp-bot
@@ -21,7 +27,9 @@ else
 fi
 
 # 3. Install and start systemd service
-sudo cp "${SCRIPT_DIR}/service/aosp-tracker.service" /etc/systemd/system/aosp-tracker.service
+SERVICE_FILE="/etc/systemd/system/aosp-tracker.service"
+sudo cp "${SCRIPT_DIR}/service/aosp-tracker.service" "${SERVICE_FILE}"
+sudo sed -i "s|/home/ubuntu/Downloads/aosp|${SCRIPT_DIR}|g" "${SERVICE_FILE}"
 sudo systemctl daemon-reload
 sudo systemctl enable aosp-tracker.service
 sudo systemctl restart aosp-tracker.service
