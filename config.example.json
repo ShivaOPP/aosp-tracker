@@ -1,0 +1,21 @@
+{
+  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "default_chat_id": "6340997509",
+  "default_theme": "midnightBloom",
+  "poll_interval": 5.0,
+  "update_interval": 10.0,
+  "users": {
+    "ubuntu": {
+      "name": "Rei 陈丽",
+      "emoji": "❄️",
+      "avatar": "https://avatars.githubusercontent.com/u/81792437?v=4",
+      "chat_id": "6340997509"
+    },
+    "mrjellyxd": {
+      "name": "MrJellyXD",
+      "emoji": "🍇",
+      "avatar": "https://avatars.githubusercontent.com/u/197353021?v=4",
+      "chat_id": "6340997509"
+    }
+  }
+}

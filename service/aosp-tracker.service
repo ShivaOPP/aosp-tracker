@@ -1,0 +1,18 @@
+[Unit]
+Description=AOSP Build and Source Sync Telegram Tracker Daemon
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/ubuntu/Downloads/aosp
+ExecStart=/usr/bin/python3 /home/ubuntu/Downloads/aosp/bin/aosp-tracker daemon
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
