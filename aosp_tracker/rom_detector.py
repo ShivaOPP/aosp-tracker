@@ -38,6 +38,12 @@ ROM_AVATARS = {
     "uwu-aosp": "https://avatars.githubusercontent.com/u/269222443?v=4",
     "uwuaosp": "https://avatars.githubusercontent.com/u/269222443?v=4",
     "uwu aosp": "https://avatars.githubusercontent.com/u/269222443?v=4",
+    "matrixx": "https://avatars.githubusercontent.com/u/130198031?v=4",
+    "projectmatrixx": "https://avatars.githubusercontent.com/u/130198031?v=4",
+    "superior": "https://avatars.githubusercontent.com/u/41551679?v=4",
+    "superioros": "https://avatars.githubusercontent.com/u/41551679?v=4",
+    "bliss": "https://avatars.githubusercontent.com/u/10411319?v=4",
+    "blissroms": "https://avatars.githubusercontent.com/u/10411319?v=4",
     "aosp": "https://avatars.githubusercontent.com/u/81792437?v=4",
 }
 
@@ -74,6 +80,12 @@ def detect_rom_name_from_string(s: str) -> Optional[str]:
         return "UwU-AOSP"
     if "lunaris" in lower:
         return "Lunaris-AOSP"
+    if "matrixx" in lower:
+        return "ProjectMatrixx"
+    if "superior" in lower:
+        return "SuperiorOS"
+    if "bliss" in lower:
+        return "BlissROM"
     # Never match pixel-style or pixel_style theme repos as PixelOS
     if "pixelos" in lower or (lower == "pixel") or (lower.startswith("pixel_") and not any(k in lower for k in ["style", "prop", "framework", "launcher", "theme"])):
         return "PixelOS"
@@ -163,6 +175,8 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
         "rom": None,
         "start_time": None,
         "display_version": None,
+        "out": None,
+        "out_dir": None,
     }
 
     # If build directory indicates the ROM (e.g. /home/mrjellyxd/rise), initialize with it
@@ -174,12 +188,33 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
     if not os.path.exists(soong_log_path):
         if not info["rom"]:
             info["rom"] = "AOSP"
+        # If soong.log doesn't exist yet, try to inspect the product directory on disk
+        if build_dir:
+            p_base = os.path.join(build_dir, "out", "target", "product")
+            if os.path.isdir(p_base):
+                try:
+                    cands = [
+                        d for d in os.listdir(p_base)
+                        if os.path.isdir(os.path.join(p_base, d))
+                        and d not in ["generic", "obj", "common", "install", "symbols", "fake_packages", "temp", "tmp"]
+                        and not d.startswith(".")
+                    ]
+                    if len(cands) == 1:
+                        info["device"] = cands[0]
+                    elif len(cands) > 1:
+                        cands.sort(key=lambda d: os.path.getmtime(os.path.join(p_base, d)), reverse=True)
+                        info["device"] = cands[0]
+                except Exception:
+                    pass
         return info
+
+    lineage_build = None
+    target_device_dir = None
 
     try:
         with open(soong_log_path, "r", encoding="utf-8", errors="ignore") as f:
             for idx, line in enumerate(f):
-                if idx > 1000:
+                if idx > 5000:
                     break
 
                 # Extract first timestamp as start time
@@ -188,11 +223,12 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                     if ts_match:
                         info["start_time"] = ts_match.group(1)
 
-                m = re.search(r"TARGET_DEVICE\s+([a-zA-Z0-9_-]+)", line)
+                # TARGET_DEVICE matches: TARGET_DEVICE marble, TARGET_DEVICE = marble, TARGET_DEVICE := marble, TARGET_DEVICE="marble"
+                m = re.search(r"(?:^|\s|export\s+)TARGET_DEVICE\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["device"] = m.group(1)
 
-                m = re.search(r"TARGET_PRODUCT\s+([a-zA-Z0-9_-]+)", line)
+                m = re.search(r"(?:^|\s|export\s+)TARGET_PRODUCT\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["product"] = m.group(1)
                     prod = m.group(1).lower()
@@ -201,19 +237,35 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                         if candidate:
                             info["rom"] = candidate
 
-                m = re.search(r"TARGET_BUILD_VARIANT[=\s]+([a-zA-Z0-9_-]+)", line)
+                m = re.search(r"(?:^|\s|export\s+)TARGET_BUILD_VARIANT\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["variant"] = m.group(1)
 
-                m = re.search(r"TARGET_BUILD_TYPE[=\s]+([a-zA-Z0-9_-]+)", line)
+                m = re.search(r"(?:^|\s|export\s+)TARGET_BUILD_TYPE\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["type"] = m.group(1)
 
-                m = re.search(r"TARGET_RELEASE[=\s]+([a-zA-Z0-9_-]+)", line)
+                m = re.search(r"(?:^|\s|export\s+)TARGET_RELEASE\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["release"] = m.group(1)
 
-                m = re.search(r"LINEAGE_DISPLAY_VERSION\s+([a-zA-Z0-9_.-]+)", line)
+                m = re.search(r"(?:^|\s|export\s+)OUT\s*(?::=|[:=])?\s*[\"']?([^\s\"'\],]+)[\"']?", line)
+                if m and not info["out"]:
+                    info["out"] = m.group(1)
+
+                m = re.search(r"(?:^|\s|export\s+)OUT_DIR\s*(?::=|[:=])?\s*[\"']?([^\s\"'\],]+)[\"']?", line)
+                if m and not info["out_dir"]:
+                    info["out_dir"] = m.group(1)
+
+                m = re.search(r"(?:^|\s|export\s+)LINEAGE_BUILD\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                if m:
+                    lineage_build = m.group(1)
+
+                m = re.search(r"TARGET_DEVICE_DIR\s*(?::=|[:=])?\s*device/[^/]+/([a-zA-Z0-9_-]+)", line)
+                if m:
+                    target_device_dir = m.group(1)
+
+                m = re.search(r"LINEAGE_DISPLAY_VERSION\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_.-]+)[\"']?", line)
                 if m:
                     info["display_version"] = m.group(1)
                     candidate = detect_rom_name_from_string(m.group(1))
@@ -237,6 +289,12 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                     info["rom"] = "UwU-AOSP"
                 elif "LUNARIS_" in line:
                     info["rom"] = "Lunaris-AOSP"
+                elif "MATRIXX_" in line or "MATRIXX_VERSION" in line:
+                    info["rom"] = "ProjectMatrixx"
+                elif "SUPERIOR_" in line:
+                    info["rom"] = "SuperiorOS"
+                elif "BLISS_" in line or "BLISS_VERSION" in line:
+                    info["rom"] = "BlissROM"
                 elif "PIXELOS_" in line:
                     info["rom"] = "PixelOS"
                 elif "EVOLUTION_" in line:
@@ -244,6 +302,46 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
 
     except Exception:
         pass
+
+    # Derive device if missing or generic
+    if info["device"] in [None, "", "generic"]:
+        if info.get("out"):
+            cand = os.path.basename(info["out"].rstrip("/\\"))
+            if cand and cand not in ["generic", "obj", "product"]:
+                info["device"] = cand
+        elif lineage_build:
+            info["device"] = lineage_build
+        elif target_device_dir:
+            info["device"] = target_device_dir
+        elif info.get("product") and info["product"] != "aosp":
+            prod = info["product"]
+            if "_" in prod:
+                parts = prod.split("_")
+                last = parts[-1]
+                if last not in ["generic", "arm64", "x86_64", "64", "user", "userdebug"]:
+                    info["device"] = last
+                elif len(parts) > 2 and parts[-2] not in ["generic", "arm64"]:
+                    info["device"] = parts[-2]
+
+    # If still generic, inspect filesystem if build_dir is provided
+    if info["device"] in [None, "", "generic"] and build_dir:
+        odir = info.get("out_dir") or "out"
+        p_base = os.path.join(build_dir, odir, "target", "product")
+        if os.path.isdir(p_base):
+            try:
+                cands = [
+                    d for d in os.listdir(p_base)
+                    if os.path.isdir(os.path.join(p_base, d))
+                    and d not in ["generic", "obj", "common", "install", "symbols", "fake_packages", "temp", "tmp"]
+                    and not d.startswith(".")
+                ]
+                if len(cands) == 1:
+                    info["device"] = cands[0]
+                elif len(cands) > 1:
+                    cands.sort(key=lambda d: os.path.getmtime(os.path.join(p_base, d)), reverse=True)
+                    info["device"] = cands[0]
+            except Exception:
+                pass
 
     # If ROM not yet determined, check source tree vendor or directory
     if not info["rom"] and build_dir:

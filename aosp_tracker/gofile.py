@@ -138,11 +138,18 @@ FALLBACK_GOFILE_SERVERS = [
     "store-eu-par-10",
     "store-eu-par-13",
     "store-eu-par-11",
-    "store-eu-par-3",
+    "store-eu-par-4",
+    "store-eu-par-9",
+    "store-eu-par-2",
+    "store-eu-par-5",
+    "store-eu-par-8",
     "store-eu-par-1",
-    "store6",
+    "store-eu-par-12",
+    "store-eu-par-3",
     "store10",
-    "upload",
+    "store4",
+    "store6",
+    "store1",
 ]
 
 _CACHED_SERVERS: List[str] = []
@@ -203,8 +210,11 @@ def get_ranked_gofile_servers(force_refresh: bool = False) -> List[str]:
     except Exception as e:
         logger.debug("GoFile server API fetch error: %s", e)
 
+    # Filter out 'upload' or non-store endpoints which proxy through Cloudflare
+    candidate_names = {s for s in candidate_names if s and s != "upload" and "upload" not in s.lower()}
+
     def probe(name: str) -> Tuple[str, float]:
-        host = f"{name}.gofile.io" if name != "upload" else "upload.gofile.io"
+        host = f"{name}.gofile.io"
         try:
             t0 = time.time()
             s = socket.create_connection((host, 443), timeout=1.2)
@@ -256,13 +266,12 @@ def upload_single_file(
 
     filename = os.path.basename(file_path)
     selected_server = server or get_active_gofile_server()
-    if selected_server == "upload":
-        url = "https://upload.gofile.io/uploadfile"
-    else:
-        url = f"https://{selected_server}.gofile.io/uploadfile"
+    if not selected_server or selected_server == "upload":
+        selected_server = get_active_gofile_server()
+    url = f"https://{selected_server}.gofile.io/uploadfile"
 
     cmd = [
-        "curl", "-s", "--tcp-nodelay", "--tcp-fastopen",
+        "curl", "-s", "--tcp-nodelay", "--tcp-fastopen", "--compressed",
         "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "-H", "Accept: application/json",
         "--keepalive-time", "10",

@@ -183,7 +183,10 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     search_patterns = [
         "/home/*/out/target/product/*",
         "/home/*/*/out/target/product/*",
+        "/home/*/*/*/out/target/product/*",
+        "/home/*/*/*/*/out/target/product/*",
         "/root/*/out/target/product/*",
+        "/root/*/*/out/target/product/*",
     ]
 
     candidate_dirs = []
@@ -199,7 +202,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         seen_paths.add(pdir)
 
         device = os.path.basename(pdir)
-        if device in ["obj", "installed-files", "fake_packages"]:
+        if device in ["obj", "installed-files", "fake_packages", "generic", "common", "install", "symbols", "temp", "tmp"]:
             continue
 
         # Look for soong.log
@@ -227,7 +230,8 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         # Select essential files to upload: ROM zip, fastboot flashing images (boot, recovery, dtbo, etc.), and OTA json
         # Excludes 1GB+ redundant raw partition images (system.img, vendor.img) already bundled inside the zip
         FASTBOOT_IMAGES = [
-            "boot.img", "vendor_boot.img", "recovery.img", "dtbo.img", "vbmeta.img", "init_boot.img"
+            "boot.img", "vendor_boot.img", "recovery.img", "dtbo.img", "vbmeta.img",
+            "init_boot.img", "vbmeta_system.img", "vbmeta_vendor.img", "vendor_kernel_boot.img"
         ]
         files_for_upload = []
         if main_zip and os.path.isfile(main_zip["path"]):

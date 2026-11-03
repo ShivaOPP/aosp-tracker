@@ -105,6 +105,9 @@ class BuildSession:
             self.build_type = fresh.get("type")
         if fresh.get("release") and fresh.get("release") != "unknown":
             self.release = fresh.get("release")
+        if fresh.get("out_dir"):
+            self.out_dir = os.path.join(self.build_dir, fresh["out_dir"]) if not os.path.isabs(fresh["out_dir"]) else fresh["out_dir"]
+        self.rom_info = fresh
 
     def calculate_eta(self, finished: int, total: int) -> Optional[float]:
         """Calculate ETA using a 60-second rolling speed window."""
@@ -797,6 +800,56 @@ class AospMonitor:
         # Check for build artifacts in out/target/product/<device>
         product_dir = os.path.join(session.out_dir, "target", "product", session.device)
         artifacts = discover_artifacts(product_dir, min_mtime=session.start_time)
+
+        # Resilient Device & Artifact Auto-Discovery:
+        # If product_dir produced 0 artifacts or device is generic, inspect out/target/product/*
+        if not artifacts:
+            # Check explicit OUT path from soong log if present
+            explicit_out = session.rom_info.get("out")
+            if explicit_out and os.path.isdir(explicit_out):
+                cand_arts = discover_artifacts(explicit_out, min_mtime=session.start_time)
+                if cand_arts:
+                    product_dir = explicit_out
+                    session.device = os.path.basename(explicit_out.rstrip("/\\"))
+                    artifacts = cand_arts
+                    logger.info("Discovered artifacts using explicit OUT path: %s (device: %s)", explicit_out, session.device)
+
+            if not artifacts:
+                product_base = os.path.join(session.out_dir, "target", "product")
+                if os.path.isdir(product_base):
+                    candidates = []
+                    for d in os.listdir(product_base):
+                        if d in ["generic", "obj", "common", "install", "symbols", "fake_packages", "temp", "tmp"]:
+                            continue
+                        if d.startswith("."):
+                            continue
+                        cand_path = os.path.join(product_base, d)
+                        if os.path.isdir(cand_path):
+                            candidates.append((d, cand_path, os.path.getmtime(cand_path)))
+
+                    # Sort most recently modified device directory first
+                    candidates.sort(key=lambda x: x[2], reverse=True)
+
+                    # First pass: try with session.start_time
+                    for cand_dev, cand_path, _ in candidates:
+                        cand_artifacts = discover_artifacts(cand_path, min_mtime=session.start_time)
+                        if cand_artifacts:
+                            session.device = cand_dev
+                            product_dir = cand_path
+                            artifacts = cand_artifacts
+                            logger.info("Auto-discovered device '%s' with %d artifacts at %s", cand_dev, len(artifacts), cand_path)
+                            break
+
+                    # Fallback pass: if still no artifacts, scan candidates without mtime filter
+                    if not artifacts and candidates:
+                        for cand_dev, cand_path, _ in candidates:
+                            cand_artifacts = discover_artifacts(cand_path, min_mtime=None)
+                            if cand_artifacts:
+                                session.device = cand_dev
+                                product_dir = cand_path
+                                artifacts = cand_artifacts
+                                logger.info("Auto-discovered device '%s' (fallback mtime) with %d artifacts at %s", cand_dev, len(artifacts), cand_path)
+                                break
 
         # Anti-spam: If process lived less than 30 seconds, has no artifacts, and sent no progress message, ignore it
         if duration < 30.0 and session.message_id is None and not artifacts:

@@ -6,7 +6,7 @@ formats file sizes, and computes SHA256 checksums.
 
 import os
 import hashlib
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 
 def format_file_size(size_bytes: int) -> str:
@@ -64,30 +64,26 @@ def detect_file_type(filename: str) -> str:
 # Standard images of interest for Android flashing (in order of display)
 PRIORITY_IMAGES = [
     "vendor_boot.img",
-    "vbmeta.img",
-    "dtbo.img",
-    "system.img",
-    "boot.img",
-    "super_empty.img",
-    "recovery.img",
     "init_boot.img",
+    "boot.img",
+    "recovery.img",
+    "dtbo.img",
+    "vbmeta.img",
+    "vbmeta_system.img",
+    "vbmeta_vendor.img",
+    "vendor_kernel_boot.img",
+    "super_empty.img",
+    "super.img",
+    "system.img",
     "vendor.img",
+    "payload.bin",
 ]
 
 
-def discover_artifacts(
+def _scan_product_entries(
     target_product_dir: str,
-    min_mtime: Optional[float] = None,
-    max_items: int = 12,
-    compute_hashes: bool = True,
-) -> List[Dict[str, Any]]:
-    """Scan product directory for build artifacts.
-    
-    Filters for ROM ZIPs, partition IMG files, and OTA JSON files.
-    """
-    if not os.path.isdir(target_product_dir):
-        return []
-
+    mtime_cutoff: Optional[float] = None,
+) -> Tuple[List[Tuple[str, str, int, float]], List[Tuple[str, str, int, float]], List[Tuple[str, str, int, float]]]:
     zips = []
     images = []
     jsons = []
@@ -95,7 +91,7 @@ def discover_artifacts(
     try:
         entries = os.listdir(target_product_dir)
     except Exception:
-        return []
+        return [], [], []
 
     for name in entries:
         full_path = os.path.join(target_product_dir, name)
@@ -107,52 +103,94 @@ def discover_artifacts(
         except Exception:
             continue
 
-        # If min_mtime specified, check if modified during/after build start
-        # (with 15-second grace buffer)
-        if min_mtime is not None and st.st_mtime < (min_mtime - 15):
+        # If cutoff specified, allow 30 seconds clock-drift / NTP step buffer
+        if mtime_cutoff is not None and st.st_mtime < (mtime_cutoff - 30.0):
             continue
 
         lower = name.lower()
 
         # ROM Zip
         if lower.endswith(".zip"):
-            if any(skip in lower for skip in ["otatools", "target_files", "symbols", "-obj"]):
+            if any(skip in lower for skip in ["otatools", "target_files", "symbols", "-obj", "sdk-repo", "tests.zip", "emulator"]):
                 continue
             zips.append((name, full_path, st.st_size, st.st_mtime))
 
-        # Flashing partition images
-        elif lower.endswith(".img"):
-            if name in PRIORITY_IMAGES:
-                images.append((name, full_path, st.st_size, st.st_mtime))
+        # Flashing partition images and payload.bin
+        elif lower.endswith(".img") or lower == "payload.bin":
+            images.append((name, full_path, st.st_size, st.st_mtime))
 
         # OTA JSON
         elif lower.endswith(".json"):
-            if "installed-files" not in lower and "module-info" not in lower:
+            if not any(skip in lower for skip in ["installed-files", "module-info", "target_files", "clean_steps"]):
                 jsons.append((name, full_path, st.st_size, st.st_mtime))
 
-    # Prioritize ROM zip: custom ROM branded, non-ota first
+    return zips, images, jsons
+
+
+def discover_artifacts(
+    target_product_dir: str,
+    min_mtime: Optional[float] = None,
+    max_items: int = 12,
+    compute_hashes: bool = True,
+) -> List[Dict[str, Any]]:
+    """Scan product directory for build artifacts.
+    
+    Filters for ROM ZIPs, partition IMG files, and OTA JSON files.
+    Employs fallback relaxation for incremental builds or clock drift.
+    """
+    if not os.path.isdir(target_product_dir):
+        return []
+
+    # First pass: try with strict min_mtime
+    zips, images, jsons = _scan_product_entries(target_product_dir, min_mtime)
+
+    # Fallback pass 1: if no zip found, retry with 4-hour grace window (handles cloud VM NTP steps)
+    if min_mtime is not None and not zips:
+        f_zips, f_images, f_jsons = _scan_product_entries(target_product_dir, min_mtime - 14400.0)
+        if f_zips:
+            zips = f_zips
+            if not images:
+                images = f_images
+            if not jsons:
+                jsons = f_jsons
+
+    # Fallback pass 2: if still no zip found, scan directory without mtime restriction
+    if min_mtime is not None and not zips:
+        f_zips, f_images, f_jsons = _scan_product_entries(target_product_dir, None)
+        if f_zips:
+            zips = f_zips
+            if not images:
+                images = f_images
+            if not jsons:
+                jsons = f_jsons
+
+    # Prioritize ROM zip: custom ROM branded, non-ota, larger size (>400MB), newest mtime
     def zip_score(item):
         n = item[0].lower()
+        size = item[2]
+        mtime = item[3]
         score = 0
         if not n.endswith("-ota.zip"):
-            score += 20
+            score += 25
         if not n.startswith("lineage_") and not n.startswith("aosp_"):
             score += 30
-        for brand in ["rising", "voltage", "mist", "crdroid", "derp", "infinity", "uwu", "lunaris", "pixel", "evolution"]:
+        for brand in ["rising", "voltage", "mist", "crdroid", "derp", "infinity", "uwu", "lunaris", "pixel", "evolution", "matrixx", "superior", "bliss"]:
             if brand in n:
                 score += 50
-        return (score, item[3])  # score then mtime
+        if size > 400 * 1024 * 1024:
+            score += 40
+        return (score, mtime)
 
     if zips:
         zips.sort(key=zip_score, reverse=True)
         zips = zips[:1]
 
-    # Sort images: priority ones first in exact order
+    # Sort images: priority ones first in exact order, then others newest first
     def img_priority(item):
         name = item[0]
         if name in PRIORITY_IMAGES:
-            return PRIORITY_IMAGES.index(name)
-        return 999
+            return (0, PRIORITY_IMAGES.index(name))
+        return (1, -item[3])
 
     images.sort(key=img_priority)
 
