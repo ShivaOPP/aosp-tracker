@@ -319,14 +319,19 @@ def format_sync_completed(
     )
 
 
-def make_build_completed_keyboard(rom_id_or_device: str) -> Dict[str, Any]:
+def make_build_completed_keyboard(rom_id_or_device: str, server_name: Optional[str] = None) -> Dict[str, Any]:
     """Inline button attached to build completed messages for 1-click GoFile upload."""
+    cb_data = f"upload_build:{rom_id_or_device}"
+    if server_name:
+        cand = f"upload_build:{rom_id_or_device}@{server_name}"
+        if len(cand.encode("utf-8")) <= 60:
+            cb_data = cand
     return {
         "inline_keyboard": [
             [
                 {
                     "text": "⬇️ Download Files (GoFile)",
-                    "callback_data": f"upload_build:{rom_id_or_device}",
+                    "callback_data": cb_data,
                 }
             ]
         ]

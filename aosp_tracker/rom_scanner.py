@@ -185,6 +185,9 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         "/home/*/*/out/target/product/*",
         "/home/*/*/*/out/target/product/*",
         "/home/*/*/*/*/out/target/product/*",
+        "/home/*/*/out*/target/product/*",
+        "/home/*/*/*/out*/target/product/*",
+        "/home/*/*/*/*/out*/target/product/*",
         "/root/*/out/target/product/*",
         "/root/*/*/out/target/product/*",
     ]
@@ -268,8 +271,11 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     # 2. Scan Standalone ROM Zip Packages in Downloads and Home Directories
     standalone_patterns = [
         "/home/*/Downloads/*.zip",
+        "/home/*/Downloads/*/*.zip",
         "/home/*/*.zip",
+        "/home/*/*/*.zip",
         "/root/Downloads/*.zip",
+        "/root/*.zip",
     ]
 
     standalone_files = []
@@ -279,7 +285,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     known_keywords = [
         "rising", "mist", "voltage", "crdroid", "derp", "infinity",
         "uwu", "luna", "pixel", "lineage", "evolution", "arrow", "havoc",
-        "unofficial", "community", "gapps", "vanilla",
+        "unofficial", "community", "gapps", "vanilla", "matrixx", "superior", "bliss",
     ]
 
     for fpath in standalone_files:
@@ -305,14 +311,23 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
 
         # Extract device if present in filename
         device = "unknown"
-        for cand in ["peridot", "porsche", "dodge", "munch", "alioth", "marble", "apollo", "lemonadep"]:
+        for cand in [
+            "beryl", "fogos", "tulip", "marble", "veux", "sweet", "mondrian",
+            "peridot", "porsche", "dodge", "munch", "alioth", "apollo", "lemonadep",
+            "topaz", "tapas", "miatoll", "cheetah", "panther", "husky", "shiba"
+        ]:
             if cand in lower:
                 device = cand
                 break
 
         if device == "unknown":
-            dev_match = re.search(r"[-_]([a-zA-Z0-9]+)[-_]([0-9]+\.[0-9]+|UNOFFICIAL|Community|OFFICIAL|GAPPS|VANILLA|Stable|Beta)", fname, re.IGNORECASE)
-            if dev_match:
+            m_end = re.search(r"[-_]([a-zA-Z0-9]+)\.zip$", fname, re.IGNORECASE)
+            if m_end and m_end.group(1).lower() not in ["gapps", "vanilla", "ota", "fastboot", "signed", "release", "official", "unofficial"]:
+                device = m_end.group(1)
+
+        if device == "unknown":
+            dev_match = re.search(r"[-_]([a-zA-Z0-9]+)[-_](?:[0-9]{8}|UNOFFICIAL|Community|OFFICIAL|GAPPS|VANILLA|Stable|Beta)", fname, re.IGNORECASE)
+            if dev_match and not dev_match.group(1).isdigit():
                 device = dev_match.group(1)
 
         files_to_upload = [fpath]

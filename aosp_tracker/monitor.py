@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import time
+import glob
 import logging
 import asyncio
 import threading
@@ -183,6 +184,8 @@ class AospMonitor:
         self.active_syncs: Dict[int, RepoSyncSession] = {}
         self.active_kernels: Dict[int, KernelBuildSession] = {}
         self.active_uploads: Dict[str, Dict[str, Any]] = {}
+        self.cached_multi_roms: List[Dict[str, Any]] = []
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Telegram polling offset
         self.update_offset: Optional[int] = None
@@ -795,6 +798,15 @@ class AospMonitor:
         """Handle completion or failure when build process terminates."""
         now = time.time()
         duration = now - session.start_time
+
+        # Check if soong_log exists; if not, check for other out*/soong.log in build_dir
+        if not os.path.isfile(session.soong_log_path) and os.path.isdir(session.build_dir):
+            cand_soongs = glob.glob(os.path.join(session.build_dir, "out*/soong.log"))
+            if cand_soongs:
+                cand_soongs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                session.soong_log_path = cand_soongs[0]
+                session.out_dir = os.path.dirname(cand_soongs[0])
+
         session.refresh_rom_info()
 
         # Check for build artifacts in out/target/product/<device>
@@ -851,6 +863,25 @@ class AospMonitor:
                                 logger.info("Auto-discovered device '%s' (fallback mtime) with %d artifacts at %s", cand_dev, len(artifacts), cand_path)
                                 break
 
+            # Deep search: inspect all out*/target/product/* inside build_dir
+            if not artifacts and os.path.isdir(session.build_dir):
+                cand_product_dirs = glob.glob(os.path.join(session.build_dir, "out*/target/product/*"))
+                for cdir in sorted(cand_product_dirs, key=lambda p: os.path.getmtime(p), reverse=True):
+                    if not os.path.isdir(cdir):
+                        continue
+                    bname = os.path.basename(cdir)
+                    if bname in ["generic", "obj", "common", "install", "symbols", "fake_packages", "temp", "tmp"]:
+                        continue
+                    c_arts = discover_artifacts(cdir, min_mtime=session.start_time)
+                    if not c_arts:
+                        c_arts = discover_artifacts(cdir, min_mtime=None)
+                    if c_arts:
+                        session.device = bname
+                        product_dir = cdir
+                        artifacts = c_arts
+                        logger.info("Auto-discovered product dir %s with %d artifacts (device: %s)", cdir, len(artifacts), bname)
+                        break
+
         # Anti-spam: If process lived less than 30 seconds, has no artifacts, and sent no progress message, ignore it
         if duration < 30.0 and session.message_id is None and not artifacts:
             logger.info("Ignoring short-lived build PID %d (lived %.1fs, no artifacts)", session.pid, duration)
@@ -906,8 +937,11 @@ class AospMonitor:
         total = session.last_progress.total_actions if session.last_progress else 0
         finished = session.last_progress.finished_actions if session.last_progress else 0
 
-        # Succeeded if artifacts exist and no fatal error
-        if artifacts and not has_error:
+        # Succeeded if artifacts exist and no fatal error (a produced ROM ZIP implies successful build)
+        has_rom_zip = any(a.get("type") == "ZIP" for a in artifacts)
+        is_success = bool(artifacts) and (has_rom_zip or not has_error)
+
+        if is_success:
             if finished == 0 and total == 0:
                 finished = total = 231337
             elif total > 0:
@@ -932,7 +966,7 @@ class AospMonitor:
             )
             logger.info("Build PID %d succeeded! Found %d artifacts.", session.pid, len(artifacts))
 
-            reply_markup = make_build_completed_keyboard(session.device)
+            reply_markup = make_build_completed_keyboard(session.device, self.server_name)
 
             if session.message_id:
                 self.telegram.edit_message(
@@ -1574,7 +1608,7 @@ class AospMonitor:
         def _fetch():
             url = peer.get("url", "")
             name = peer.get("name") or url
-            secret = peer.get("secret_key", "")
+            secret = peer.get("secret_key") or peer.get("secret") or self.secret_key
             req = urllib.request.Request(url)
             if secret:
                 req.add_header("X-AOSP-Secret", secret)
@@ -1602,6 +1636,102 @@ class AospMonitor:
             result["kernels"] = [k for k in result.get("kernels", []) if not k.get("is_hidden")]
             result["syncs"] = [s for s in result.get("syncs", []) if not s.get("is_hidden")]
         return result
+
+    def get_local_roms(self) -> List[Dict[str, Any]]:
+        """Return list of local ROMs formatted for multi-server aggregation."""
+        roms = scan_all_roms(force_refresh=True)
+        results = []
+        for r in roms:
+            r_copy = dict(r)
+            r_copy["server_name"] = self.server_name or socket.gethostname()
+            results.append(r_copy)
+        return results
+
+    async def get_all_multi_server_roms(self) -> List[Dict[str, Any]]:
+        """Scan local ROMs and fetch ROMs from all configured peer servers."""
+        local_roms = await asyncio.to_thread(self.get_local_roms)
+        if not self.peer_servers:
+            self.cached_multi_roms = local_roms
+            return local_roms
+
+        async def fetch_peer_roms(peer: Dict[str, Any]) -> List[Dict[str, Any]]:
+            peer_url = peer.get("url", "").rstrip("/")
+            if peer_url.endswith("/status"):
+                peer_url = peer_url[:-7]
+            secret = peer.get("secret_key") or peer.get("secret") or self.secret_key
+            try:
+                req = urllib.request.Request(
+                    f"{peer_url}/api/roms",
+                    headers={"X-AOSP-Secret": secret} if secret else {},
+                )
+                resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=4.0)
+                data = json.loads(resp.read().decode("utf-8"))
+                peer_roms = data.get("roms", [])
+                p_name = peer.get("name") or "Peer Server"
+                for pr in peer_roms:
+                    if not pr.get("server_name"):
+                        pr["server_name"] = p_name
+                return peer_roms
+            except Exception as e:
+                logger.debug("Failed to fetch ROMs from peer %s: %s", peer.get("name"), e)
+                return []
+
+        peer_rom_lists = await asyncio.gather(*[fetch_peer_roms(p) for p in self.peer_servers])
+        all_roms = list(local_roms)
+        for r_list in peer_rom_lists:
+            all_roms.extend(r_list)
+        self.cached_multi_roms = all_roms
+        return all_roms
+
+    def handle_remote_upload_request(self, device: str, chat_id: str, rom_id: Optional[str] = None) -> Dict[str, Any]:
+        """Triggered via HTTP API from peer server to start a GoFile upload of local artifacts."""
+        roms = scan_all_roms(force_refresh=True)
+        target_rom = None
+        if rom_id:
+            for r in roms:
+                if r.get("id") == rom_id:
+                    target_rom = r
+                    break
+        if not target_rom and device:
+            d_low = device.lower().strip()
+            for r in roms:
+                if r.get("device", "").lower() == d_low and r.get("type") == "build":
+                    target_rom = r
+                    break
+            if not target_rom:
+                for r in roms:
+                    if r.get("device", "").lower() == d_low:
+                        target_rom = r
+                        break
+            if not target_rom:
+                for r in roms:
+                    if d_low in r.get("main_zip_name", "").lower() or d_low in r.get("directory", "").lower():
+                        target_rom = r
+                        break
+
+        if target_rom:
+            logger.info("Executing remote-requested GoFile upload for %s (%s) to chat %s", target_rom.get("name"), device, chat_id)
+            if self.loop and self.loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.start_gofile_upload(chat_id, target_rom), self.loop)
+            else:
+                asyncio.create_task(self.start_gofile_upload(chat_id, target_rom))
+            return {"success": True, "message": f"Upload started for {device} on {self.server_name}"}
+
+        logger.warning("Remote upload requested for device '%s' but no artifacts found on %s", device, self.server_name)
+        return {"success": False, "message": f"No artifacts found for {device} on {self.server_name}"}
+
+    def handle_remote_cancel_request(self, upload_id: str) -> Dict[str, Any]:
+        """Triggered via HTTP API to cancel an active upload running on this node."""
+        upload_entry = self.active_uploads.get(upload_id)
+        if upload_entry:
+            upload_entry["cancel_event"].set()
+            for proc in list(upload_entry.get("active_procs", [])):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return {"success": True, "message": "Upload cancelled"}
+        return {"success": False, "message": "Upload not found"}
 
     async def handle_telegram_message(self, msg: Dict[str, Any]):
         """Handle incoming chat messages and slash commands."""
@@ -1648,7 +1778,7 @@ class AospMonitor:
                 return
 
         if cmd in ["/start", "/roms", "/download", "/upload", "/search"]:
-            all_roms = await asyncio.to_thread(scan_all_roms, True)
+            all_roms = await self.get_all_multi_server_roms()
             is_private_admin_dl = (cmd in ["/download", "/upload"] and chat_id == self.hidden_user_target_chat_id)
             if not is_private_admin_dl:
                 all_roms = [
@@ -1660,7 +1790,7 @@ class AospMonitor:
             self.telegram.send_message(chat_id, list_text, parse_mode="HTML", reply_markup=kb)
 
         elif cmd == "/kernels":
-            all_roms = await asyncio.to_thread(scan_all_roms, True)
+            all_roms = await self.get_all_multi_server_roms()
             all_roms = [
                 r for r in all_roms
                 if not self.is_hidden_rom_or_user(r.get("username"), r.get("name"), r.get("directory"))
@@ -1736,7 +1866,7 @@ class AospMonitor:
 
         if data == "rescan_roms":
             self.telegram.answer_callback_query(cb_id, text="Scanning server for ROMs...")
-            roms = await asyncio.to_thread(scan_all_roms, True)
+            roms = await self.get_all_multi_server_roms()
             if chat_id != self.hidden_user_target_chat_id:
                 roms = [
                     r for r in roms
@@ -1755,45 +1885,132 @@ class AospMonitor:
 
         elif data.startswith("dl:"):
             rom_id = data[3:]
-            rom = get_rom_by_id(rom_id)
+            rom = None
+            for r in self.cached_multi_roms:
+                if r.get("id") == rom_id:
+                    rom = r
+                    break
             if not rom:
-                # Force refresh in case cache expired
-                roms = await asyncio.to_thread(scan_all_roms, True)
                 rom = get_rom_by_id(rom_id)
+            if not rom:
+                all_roms = await self.get_all_multi_server_roms()
+                for r in all_roms:
+                    if r.get("id") == rom_id:
+                        rom = r
+                        break
 
             if rom:
                 if self.is_hidden_rom_or_user(rom.get("username"), rom.get("name"), rom.get("directory")):
                     if chat_id != self.hidden_user_target_chat_id:
                         self.telegram.answer_callback_query(cb_id, text="⛔ ROM not found or unavailable.", show_alert=True)
                         return
+
+                target_server = rom.get("server_name")
+                # If target server is a peer server, delegate the upload to the peer
+                if target_server and target_server != self.server_name and self.peer_servers:
+                    self.telegram.answer_callback_query(cb_id, text=f"Uploading {rom['name']} via {target_server}...")
+                    for peer in self.peer_servers:
+                        p_name = peer.get("name") or peer.get("url")
+                        if p_name.lower() == target_server.lower() or peer.get("url", "").lower() == target_server.lower():
+                            peer_url = peer.get("url", "").rstrip("/")
+                            if peer_url.endswith("/status"):
+                                peer_url = peer_url[:-7]
+                            secret = peer.get("secret_key") or peer.get("secret") or self.secret_key
+                            try:
+                                req_data = json.dumps({"rom_id": rom_id, "chat_id": chat_id, "device": rom.get("device")}).encode("utf-8")
+                                req = urllib.request.Request(
+                                    f"{peer_url}/api/upload",
+                                    data=req_data,
+                                    headers={"Content-Type": "application/json", "X-AOSP-Secret": secret} if secret else {"Content-Type": "application/json"},
+                                    method="POST",
+                                )
+                                await asyncio.to_thread(urllib.request.urlopen, req, timeout=10.0)
+                                return
+                            except Exception as e:
+                                logger.warning("Failed to delegate dl upload to %s: %s", target_server, e)
+                                break
+
+                # Local upload
                 self.telegram.answer_callback_query(cb_id, text=f"Uploading {rom['name']} to GoFile...")
                 asyncio.create_task(self.start_gofile_upload(chat_id, rom))
             else:
                 self.telegram.answer_callback_query(cb_id, text="ROM not found. Please click Rescan Server.", show_alert=True)
 
         elif data.startswith("upload_build:"):
-            device = data.split(":", 1)[1]
+            raw_target = data.split(":", 1)[1]
+            target_peer = None
+            if "@" in raw_target:
+                device, target_peer = raw_target.split("@", 1)
+            else:
+                device = raw_target
+
+            device_clean = device.strip()
+            d_low = device_clean.lower()
+
+            # 1. Search locally on this server first
             roms = await asyncio.to_thread(scan_all_roms, True)
             target_rom = None
             for r in roms:
-                if r["device"] == device and r["type"] == "build":
+                if r.get("device", "").lower() == d_low and r.get("type") == "build":
                     target_rom = r
                     break
-            if not target_rom and roms:
+            if not target_rom:
                 for r in roms:
-                    if r["device"] == device:
+                    if r.get("device", "").lower() == d_low:
+                        target_rom = r
+                        break
+            if not target_rom:
+                for r in roms:
+                    if d_low in r.get("main_zip_name", "").lower() or d_low in r.get("directory", "").lower():
                         target_rom = r
                         break
 
             if target_rom:
                 if self.is_hidden_rom_or_user(target_rom.get("username"), target_rom.get("name"), target_rom.get("directory")):
                     if chat_id != self.hidden_user_target_chat_id:
-                        self.telegram.answer_callback_query(cb_id, text=f"⛔ Artifacts not found for {device}.", show_alert=True)
+                        self.telegram.answer_callback_query(cb_id, text=f"⛔ Artifacts not found for {device_clean}.", show_alert=True)
                         return
-                self.telegram.answer_callback_query(cb_id, text=f"Uploading files for {device} to GoFile...")
+                self.telegram.answer_callback_query(cb_id, text=f"Uploading files for {device_clean} to GoFile...")
                 asyncio.create_task(self.start_gofile_upload(chat_id, target_rom))
-            else:
-                self.telegram.answer_callback_query(cb_id, text=f"No artifacts found for {device}.", show_alert=True)
+                return
+
+            # 2. Not found locally! Delegate to peer workers
+            if self.peer_servers:
+                self.telegram.answer_callback_query(cb_id, text=f"Searching artifacts for {device_clean} on worker servers...")
+                delegated = False
+                for peer in self.peer_servers:
+                    peer_url = peer.get("url", "").rstrip("/")
+                    if peer_url.endswith("/status"):
+                        peer_url = peer_url[:-7]
+                    peer_name = peer.get("name", "Peer Server")
+                    if target_peer and peer_name.lower() != target_peer.lower():
+                        continue
+
+                    secret = peer.get("secret_key") or peer.get("secret") or self.secret_key
+                    try:
+                        req_data = json.dumps({"device": device_clean, "chat_id": chat_id}).encode("utf-8")
+                        req = urllib.request.Request(
+                            f"{peer_url}/api/upload",
+                            data=req_data,
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-AOSP-Secret": secret,
+                            } if secret else {"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=10.0)
+                        resp_data = json.loads(resp.read().decode("utf-8"))
+                        if resp_data.get("success"):
+                            delegated = True
+                            logger.info("Successfully delegated upload for %s to %s (%s)", device_clean, peer_name, peer_url)
+                            break
+                    except Exception as e:
+                        logger.warning("Peer %s upload delegation error: %s", peer_name, e)
+
+                if delegated:
+                    return
+
+            self.telegram.answer_callback_query(cb_id, text=f"No artifacts found for {device_clean} on any server.", show_alert=True)
 
         elif data.startswith("cancel_upload:"):
             upload_id = data.split(":", 1)[1]
@@ -1808,7 +2025,28 @@ class AospMonitor:
                 self.telegram.answer_callback_query(cb_id, text="Cancelling upload...")
                 logger.info("Signaled cancel for upload %s", upload_id)
             else:
-                self.telegram.answer_callback_query(cb_id, text="Upload not found or already finished.")
+                # Forward cancel to peer workers
+                if self.peer_servers:
+                    for peer in self.peer_servers:
+                        peer_url = peer.get("url", "").rstrip("/")
+                        if peer_url.endswith("/status"):
+                            peer_url = peer_url[:-7]
+                        secret = peer.get("secret_key") or peer.get("secret") or self.secret_key
+                        try:
+                            req_data = json.dumps({"upload_id": upload_id}).encode("utf-8")
+                            req = urllib.request.Request(
+                                f"{peer_url}/api/cancel_upload",
+                                data=req_data,
+                                headers={
+                                    "Content-Type": "application/json",
+                                    "X-AOSP-Secret": secret,
+                                } if secret else {"Content-Type": "application/json"},
+                                method="POST",
+                            )
+                            await asyncio.to_thread(urllib.request.urlopen, req, timeout=3.0)
+                        except Exception:
+                            pass
+                self.telegram.answer_callback_query(cb_id, text="Upload cancel requested.")
 
     async def poll_telegram_updates(self):
         """Long poll Telegram getUpdates to handle incoming commands and inline button callbacks."""
@@ -1925,6 +2163,7 @@ class AospMonitor:
 
     async def run(self):
         """Main async daemon runner with concurrent monitoring, Status API, and Telegram polling."""
+        self.loop = asyncio.get_running_loop()
         node_name = self.server_name or socket.gethostname()
         logger.info("AOSP Tracker Daemon started on node %s.", node_name)
 
@@ -1933,6 +2172,9 @@ class AospMonitor:
                 host=self.api_host,
                 port=self.api_port,
                 get_status_callback=lambda: self.get_local_status(is_allowed_hidden=True),
+                get_roms_callback=self.get_local_roms,
+                start_upload_callback=self.handle_remote_upload_request,
+                cancel_upload_callback=self.handle_remote_cancel_request,
                 secret_key=self.secret_key,
             )
             self.status_server.start()
