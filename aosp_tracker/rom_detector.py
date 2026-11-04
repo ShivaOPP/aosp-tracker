@@ -224,11 +224,11 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                         info["start_time"] = ts_match.group(1)
 
                 # TARGET_DEVICE matches: TARGET_DEVICE marble, TARGET_DEVICE = marble, TARGET_DEVICE := marble, TARGET_DEVICE="marble"
-                m = re.search(r"(?:^|\s|export\s+)TARGET_DEVICE\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])TARGET_DEVICE\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["device"] = m.group(1)
 
-                m = re.search(r"(?:^|\s|export\s+)TARGET_PRODUCT\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])TARGET_PRODUCT\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["product"] = m.group(1)
                     prod = m.group(1).lower()
@@ -237,27 +237,27 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                         if candidate:
                             info["rom"] = candidate
 
-                m = re.search(r"(?:^|\s|export\s+)TARGET_BUILD_VARIANT\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])TARGET_BUILD_VARIANT\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["variant"] = m.group(1)
 
-                m = re.search(r"(?:^|\s|export\s+)TARGET_BUILD_TYPE\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])TARGET_BUILD_TYPE\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["type"] = m.group(1)
 
-                m = re.search(r"(?:^|\s|export\s+)TARGET_RELEASE\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])TARGET_RELEASE\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     info["release"] = m.group(1)
 
-                m = re.search(r"(?:^|\s|export\s+)OUT\s*(?::=|[:=])?\s*[\"']?([^\s\"'\],]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])OUT\s*[:=]\s*[\"']?([^\s\"'\],]+)[\"']?", line)
                 if m and not info["out"]:
                     info["out"] = m.group(1)
 
-                m = re.search(r"(?:^|\s|export\s+)OUT_DIR\s*(?::=|[:=])?\s*[\"']?([^\s\"'\],]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])OUT_DIR\s*[:=]\s*[\"']?([^\s\"'\],]+)[\"']?", line)
                 if m and not info["out_dir"]:
                     info["out_dir"] = m.group(1)
 
-                m = re.search(r"(?:^|\s|export\s+)LINEAGE_BUILD\s*(?::=|[:=])?\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
+                m = re.search(r"(?:^|[\s\[])LINEAGE_BUILD\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)
                 if m:
                     lineage_build = m.group(1)
 

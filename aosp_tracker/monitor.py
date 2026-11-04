@@ -55,12 +55,44 @@ from .gofile import upload_artifacts_batch
 logger = logging.getLogger("aosp_tracker.monitor")
 
 
+def resolve_android_dir(path: Optional[str]) -> Optional[str]:
+    """Resolve the true root of an Android tree by climbing parent directories if given a subfolder."""
+    if not path or not os.path.isdir(path):
+        return path
+    cur = os.path.abspath(path)
+    while cur and cur != os.path.dirname(cur):
+        if (
+            os.path.isfile(os.path.join(cur, "out", "soong.log"))
+            or os.path.isfile(os.path.join(cur, "out", "build_progress.pb"))
+            or os.path.isdir(os.path.join(cur, "build", "make"))
+            or os.path.isdir(os.path.join(cur, "build", "soong"))
+            or os.path.isdir(os.path.join(cur, ".repo"))
+        ):
+            return cur
+        cur = os.path.dirname(cur)
+    return os.path.abspath(path)
+
+
 class BuildSession:
     def __init__(self, pid: int, username: str, build_dir: str, start_time: float):
         self.pid = pid
         self.username = username
-        self.build_dir = build_dir
-        self.out_dir = os.path.join(build_dir, "out")
+        self.build_dir = resolve_android_dir(build_dir) or build_dir
+
+        out_candidate = None
+        try:
+            p = psutil.Process(pid)
+            env = p.environ()
+            top = env.get("TOP")
+            if top and os.path.isdir(top):
+                self.build_dir = os.path.abspath(top)
+            od = env.get("OUT_DIR")
+            if od:
+                out_candidate = od if os.path.isabs(od) else os.path.join(self.build_dir, od)
+        except Exception:
+            pass
+
+        self.out_dir = out_candidate or os.path.join(self.build_dir, "out")
         self.start_time = start_time
 
         self.progress_pb_path = os.path.join(self.out_dir, "build_progress.pb")
@@ -94,9 +126,9 @@ class BuildSession:
     def refresh_rom_info(self):
         """Re-read soong.log if metadata was incomplete during initial startup."""
         fresh = parse_soong_log(self.soong_log_path, self.build_dir)
-        if fresh.get("device") and fresh.get("device") != "generic":
+        if fresh.get("device") and fresh.get("device") not in ["generic", "_DIR"]:
             self.device = fresh.get("device")
-        if fresh.get("rom") and fresh.get("rom") != "AOSP":
+        if fresh.get("rom") and fresh.get("rom") not in ["AOSP", "generic"]:
             self.rom_title = fresh.get("rom")
             if not self.user_profile.get("avatar"):
                 self.avatar_url = get_rom_avatar(self.rom_title)
@@ -107,7 +139,12 @@ class BuildSession:
         if fresh.get("release") and fresh.get("release") != "unknown":
             self.release = fresh.get("release")
         if fresh.get("out_dir"):
-            self.out_dir = os.path.join(self.build_dir, fresh["out_dir"]) if not os.path.isabs(fresh["out_dir"]) else fresh["out_dir"]
+            new_out = os.path.join(self.build_dir, fresh["out_dir"]) if not os.path.isabs(fresh["out_dir"]) else fresh["out_dir"]
+            if new_out != self.out_dir:
+                self.out_dir = new_out
+                self.progress_pb_path = os.path.join(self.out_dir, "build_progress.pb")
+                self.soong_log_path = os.path.join(self.out_dir, "soong.log")
+                self.error_log_path = os.path.join(self.out_dir, "error.log")
         self.rom_info = fresh
 
     def calculate_eta(self, finished: int, total: int) -> Optional[float]:
@@ -283,15 +320,18 @@ class AospMonitor:
                         p = psutil.Process(pid)
                         cmd = p.cmdline()
                         if any("soong_ui" in a for a in cmd):
-                            session = BuildSession(pid, data["username"], data["build_dir"], data["start_time"])
+                            bdir = resolve_android_dir(data.get("build_dir")) or data.get("build_dir")
+                            session = BuildSession(pid, data["username"], bdir, data["start_time"])
                             session.message_id = data.get("message_id")
                             session.chat_id = data.get("chat_id")
-                            session.rom_title = data.get("rom_title", session.rom_title)
-                            session.device = data.get("device", session.device)
+                            if session.rom_title in ["AOSP", "generic"] and data.get("rom_title") and data.get("rom_title") not in ["AOSP", "generic"]:
+                                session.rom_title = data["rom_title"]
+                            if session.device in ["generic", "_DIR"] and data.get("device") and data.get("device") not in ["generic", "_DIR"]:
+                                session.device = data["device"]
                             session.last_pct = data.get("last_pct", -1.0)
                             session.last_edit_time = data.get("last_edit_time", 0.0)
                             self.active_builds[pid] = session
-                            logger.info("Restored build session for PID %d (msg_id: %s)", pid, session.message_id)
+                            logger.info("Restored build session for PID %d (msg_id: %s, rom: %s, dev: %s)", pid, session.message_id, session.rom_title, session.device)
                     except Exception:
                         pass
             for pid_str, data in state.get("syncs", {}).items():
@@ -420,18 +460,45 @@ class AospMonitor:
                 username = p.info.get("username") or "unknown"
                 create_time = p.info.get("create_time") or time.time()
 
-                # Extract directory from --dir= or cwd
+                # Extract and resolve true Android build root
                 build_dir = None
-                for arg in cmd:
-                    if arg.startswith("--dir="):
-                        build_dir = arg.split("=", 1)[1]
-                        break
+                try:
+                    proc_obj = psutil.Process(pid)
+                    env = proc_obj.environ()
+                    top = env.get("TOP")
+                    if top and os.path.isdir(top):
+                        build_dir = os.path.abspath(top)
+                except Exception:
+                    pass
 
                 if not build_dir:
                     try:
-                        build_dir = p.cwd()
+                        cwd = p.cwd()
+                        if cwd and os.path.isdir(cwd):
+                            build_dir = resolve_android_dir(cwd)
                     except Exception:
                         pass
+
+                if not build_dir:
+                    for arg in cmd:
+                        if arg.startswith("--dir="):
+                            candidate = arg.split("=", 1)[1]
+                            build_dir = resolve_android_dir(candidate)
+                            break
+
+                if not build_dir and cmd and cmd[0]:
+                    bin_path = os.path.abspath(cmd[0])
+                    if "/out/soong_ui" in bin_path:
+                        cand = bin_path.split("/out/soong_ui")[0]
+                        if os.path.isdir(cand):
+                            build_dir = cand
+                    elif "/build/soong/bin/soong_ui" in bin_path:
+                        cand = bin_path.split("/build/soong/bin/soong_ui")[0]
+                        if os.path.isdir(cand):
+                            build_dir = cand
+
+                if build_dir:
+                    build_dir = resolve_android_dir(build_dir)
 
                 if build_dir and os.path.isdir(build_dir):
                     results.append((pid, username, build_dir, create_time))
@@ -798,6 +865,14 @@ class AospMonitor:
         """Handle completion or failure when build process terminates."""
         now = time.time()
         duration = now - session.start_time
+
+        # Ensure build_dir and out_dir are accurately resolved to Android tree root
+        session.build_dir = resolve_android_dir(session.build_dir) or session.build_dir
+        if not os.path.isabs(session.out_dir) or not os.path.isdir(session.out_dir):
+            session.out_dir = os.path.join(session.build_dir, "out")
+            session.progress_pb_path = os.path.join(session.out_dir, "build_progress.pb")
+            session.soong_log_path = os.path.join(session.out_dir, "soong.log")
+            session.error_log_path = os.path.join(session.out_dir, "error.log")
 
         # Check if soong_log exists; if not, check for other out*/soong.log in build_dir
         if not os.path.isfile(session.soong_log_path) and os.path.isdir(session.build_dir):
@@ -1816,6 +1891,13 @@ class AospMonitor:
             status_text = format_multi_server_status(all_servers)
             self.telegram.send_message(chat_id, status_text, parse_mode="HTML")
 
+        elif cmd in ["/restart", "/reload"]:
+            if from_id not in self.admin_ids:
+                return
+            self.telegram.send_message(chat_id, "🔄 <b>Restarting AOSP Tracker service...</b>", parse_mode="HTML")
+            self.save_state()
+            os._exit(0)
+
         elif cmd == "/help":
             help_text = (
                 "🤖 <b>AOSP Tracker & Downloader Bot</b>\n\n"
@@ -2091,6 +2173,16 @@ class AospMonitor:
                         self.active_builds[pid] = BuildSession(pid, username, build_dir, create_time)
                         active_build_dirs.add(build_dir)
                         self.save_state()
+                    else:
+                        sess = self.active_builds[pid]
+                        if sess.build_dir != build_dir or not os.path.exists(sess.progress_pb_path):
+                            sess.build_dir = build_dir
+                            sess.out_dir = os.path.join(build_dir, "out")
+                            sess.progress_pb_path = os.path.join(sess.out_dir, "build_progress.pb")
+                            sess.soong_log_path = os.path.join(sess.out_dir, "soong.log")
+                            sess.error_log_path = os.path.join(sess.out_dir, "error.log")
+                            sess.refresh_rom_info()
+                            self.save_state()
 
                     self.process_build_step(self.active_builds[pid])
 
