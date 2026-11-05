@@ -19,7 +19,7 @@ except Exception:
     pass
 
 
-def get_system_stats(path: str = "/") -> Dict[str, Any]:
+def get_system_stats(path: Optional[str] = None) -> Dict[str, Any]:
     """Get current system CPU, RAM, and NVMe disk usage."""
     try:
         cpu = psutil.cpu_percent(interval=None)
@@ -34,15 +34,59 @@ def get_system_stats(path: str = "/") -> Dict[str, Any]:
     except Exception:
         ram_used_gb, ram_total_gb, ram_pct = 0.0, 0.0, 0.0
 
+    # Determine optimal disk path to monitor (e.g. /mnt/data, /data, or largest mount)
+    candidates = []
+    if path and path != "/":
+        candidates.append(path)
+
+    # 1. Configured disk_path / storage_path
+    try:
+        from .user_detector import load_global_config
+        cfg = load_global_config()
+        if cfg.get("disk_path"):
+            candidates.append(cfg["disk_path"])
+        if cfg.get("storage_path"):
+            candidates.append(cfg["storage_path"])
+    except Exception:
+        pass
+
+    # 2. Common dedicated build storage paths (prioritize /mnt/data)
+    for cand in ["/mnt/data", "/data"]:
+        if os.path.exists(cand):
+            candidates.append(cand)
+
+    # 3. Discovered real mountpoints with large storage (>10GB)
+    try:
+        real_parts = []
+        for p in psutil.disk_partitions(all=False):
+            if p.fstype in ["squashfs", "iso9660", "vfat", "tmpfs"] or p.mountpoint.startswith(("/snap", "/boot", "/run")):
+                continue
+            try:
+                u = psutil.disk_usage(p.mountpoint)
+                if p.mountpoint != "/" and u.total > 10 * (1024 ** 3):
+                    real_parts.append((p.mountpoint, u.total))
+            except Exception:
+                pass
+        real_parts.sort(key=lambda x: x[1], reverse=True)
+        for mp, _ in real_parts:
+            if mp not in candidates:
+                candidates.append(mp)
+    except Exception:
+        pass
+
+    candidates.append("/")
+
     disk_used_gb, disk_total_gb, disk_pct = 0.0, 0.0, 0.0
-    for target in [path, "/"]:
-        if not target:
+    selected_target = "/"
+    for target in candidates:
+        if not target or not os.path.exists(target):
             continue
         try:
             disk = psutil.disk_usage(target)
             disk_used_gb = disk.used / (1024 ** 3)
             disk_total_gb = disk.total / (1024 ** 3)
             disk_pct = disk.percent
+            selected_target = target
             break
         except Exception:
             pass
@@ -55,6 +99,7 @@ def get_system_stats(path: str = "/") -> Dict[str, Any]:
         "disk_used_gb": disk_used_gb,
         "disk_total_gb": disk_total_gb,
         "disk_pct": disk_pct,
+        "disk_label": selected_target if selected_target != "/" else "",
     }
 
 
@@ -120,11 +165,12 @@ def format_build_in_progress(
 
     sys_block = ""
     if system_stats:
+        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
         sys_block = (
             f"💻 System Resources:\n"
             f"  • CPU: {system_stats['cpu_pct']:.1f}%\n"
             f"  • RAM: {system_stats['ram_used_gb']:.1f} / {system_stats['ram_total_gb']:.1f} GB ({system_stats['ram_pct']:.1f}%)\n"
-            f"  • NVMe: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
+            f"  • NVMe{d_lbl}: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
         )
 
     return (
@@ -182,7 +228,8 @@ def format_build_completed(
     ])
 
     if system_stats:
-        lines.append(f"💾 NVMe Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
+        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
+        lines.append(f"💾 NVMe{d_lbl} Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
 
     lines.extend([
         f"🔧 Configuration:",
@@ -266,11 +313,12 @@ def format_sync_in_progress(
 
     sys_block = ""
     if system_stats:
+        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
         sys_block = (
             f"💻 System Resources:\n"
             f"  • CPU: {system_stats['cpu_pct']:.1f}%\n"
             f"  • RAM: {system_stats['ram_used_gb']:.1f} / {system_stats['ram_total_gb']:.1f} GB ({system_stats['ram_pct']:.1f}%)\n"
-            f"  • NVMe: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
+            f"  • NVMe{d_lbl}: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
         )
 
     return (
@@ -533,11 +581,12 @@ def format_kernel_build_in_progress(
 
     sys_block = ""
     if system_stats:
+        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
         sys_block = (
             f"💻 System Resources:\n"
             f"  • CPU: {system_stats['cpu_pct']:.1f}%\n"
             f"  • RAM: {system_stats['ram_used_gb']:.1f} / {system_stats['ram_total_gb']:.1f} GB ({system_stats['ram_pct']:.1f}%)\n"
-            f"  • NVMe: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
+            f"  • NVMe{d_lbl}: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
         )
 
     dev_label = html.escape(device)
@@ -603,7 +652,8 @@ def format_kernel_build_completed(
     ])
 
     if system_stats:
-        lines.append(f"💾 NVMe Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
+        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
+        lines.append(f"💾 NVMe{d_lbl} Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
 
     lines.extend([
         f"🔧 Configuration:",
@@ -702,11 +752,12 @@ def format_server_status_block(
 
     lines = [f"🖥️ <b>{html.escape(server_name)}</b> 🟢"]
     if system_stats:
+        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
         lines.extend([
             f"💻 <b>System Resources:</b>",
             f"  • CPU: {system_stats.get('cpu_pct', 0.0):.1f}%",
             f"  • RAM: {system_stats.get('ram_used_gb', 0.0):.1f} / {system_stats.get('ram_total_gb', 0.0):.1f} GB ({system_stats.get('ram_pct', 0.0):.1f}%)",
-            f"  • NVMe: {system_stats.get('disk_used_gb', 0.0):.1f} / {system_stats.get('disk_total_gb', 0.0):.1f} GB ({system_stats.get('disk_pct', 0.0):.1f}%)\n",
+            f"  • NVMe{d_lbl}: {system_stats.get('disk_used_gb', 0.0):.1f} / {system_stats.get('disk_total_gb', 0.0):.1f} GB ({system_stats.get('disk_pct', 0.0):.1f}%)\n",
         ])
 
     active_build_count = len(builds)
