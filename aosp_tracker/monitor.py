@@ -768,6 +768,16 @@ class AospMonitor:
 
         session.refresh_rom_info()
 
+        # If progress_pb_path doesn't exist, self-heal by searching build_dir for out*/build_progress.pb
+        if not os.path.isfile(session.progress_pb_path) and os.path.isdir(session.build_dir):
+            cand_pbs = glob.glob(os.path.join(session.build_dir, "out*/build_progress.pb"))
+            if cand_pbs:
+                cand_pbs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                session.progress_pb_path = cand_pbs[0]
+                session.out_dir = os.path.dirname(cand_pbs[0])
+                session.soong_log_path = os.path.join(session.out_dir, "soong.log")
+                session.error_log_path = os.path.join(session.out_dir, "error.log")
+
         # Parse build_progress.pb
         progress = parse_build_progress(session.progress_pb_path)
         if progress and progress.total_actions > 0:
@@ -1760,40 +1770,44 @@ class AospMonitor:
 
     def handle_remote_upload_request(self, device: str, chat_id: str, rom_id: Optional[str] = None) -> Dict[str, Any]:
         """Triggered via HTTP API from peer server to start a GoFile upload of local artifacts."""
-        roms = scan_all_roms(force_refresh=True)
-        target_rom = None
-        if rom_id:
-            for r in roms:
-                if r.get("id") == rom_id:
-                    target_rom = r
-                    break
-        if not target_rom and device:
-            d_low = device.lower().strip()
-            for r in roms:
-                if r.get("device", "").lower() == d_low and r.get("type") == "build":
-                    target_rom = r
-                    break
-            if not target_rom:
+        try:
+            roms = scan_all_roms(force_refresh=True)
+            target_rom = None
+            if rom_id:
                 for r in roms:
-                    if r.get("device", "").lower() == d_low:
+                    if r.get("id") == rom_id:
                         target_rom = r
                         break
-            if not target_rom:
+            if not target_rom and device:
+                d_low = device.lower().strip()
                 for r in roms:
-                    if d_low in r.get("main_zip_name", "").lower() or d_low in r.get("directory", "").lower():
+                    if r.get("device", "").lower() == d_low and r.get("type") == "build":
                         target_rom = r
                         break
+                if not target_rom:
+                    for r in roms:
+                        if r.get("device", "").lower() == d_low:
+                            target_rom = r
+                            break
+                if not target_rom:
+                    for r in roms:
+                        if d_low in r.get("main_zip_name", "").lower() or d_low in r.get("directory", "").lower():
+                            target_rom = r
+                            break
 
-        if target_rom:
-            logger.info("Executing remote-requested GoFile upload for %s (%s) to chat %s", target_rom.get("name"), device, chat_id)
-            if self.loop and self.loop.is_running():
-                asyncio.run_coroutine_threadsafe(self.start_gofile_upload(chat_id, target_rom), self.loop)
-            else:
-                asyncio.create_task(self.start_gofile_upload(chat_id, target_rom))
-            return {"success": True, "message": f"Upload started for {device} on {self.server_name}"}
+            if target_rom:
+                logger.info("Executing remote-requested GoFile upload for %s (%s) to chat %s", target_rom.get("name"), device, chat_id)
+                if self.loop and self.loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self.start_gofile_upload(chat_id, target_rom), self.loop)
+                else:
+                    asyncio.create_task(self.start_gofile_upload(chat_id, target_rom))
+                return {"success": True, "message": f"Upload started for {device} on {self.server_name}"}
 
-        logger.warning("Remote upload requested for device '%s' but no artifacts found on %s", device, self.server_name)
-        return {"success": False, "message": f"No artifacts found for {device} on {self.server_name}"}
+            logger.warning("Remote upload requested for device '%s' but no artifacts found on %s", device, self.server_name)
+            return {"success": False, "message": f"No artifacts found for {device} on {self.server_name}"}
+        except Exception as e:
+            logger.exception("Error in handle_remote_upload_request: %s", e)
+            return {"success": False, "message": f"Error scanning artifacts on {self.server_name}: {e}"}
 
     def handle_remote_cancel_request(self, upload_id: str) -> Dict[str, Any]:
         """Triggered via HTTP API to cancel an active upload running on this node."""

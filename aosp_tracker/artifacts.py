@@ -174,7 +174,12 @@ def discover_artifacts(
             score += 25
         if not n.startswith("lineage_") and not n.startswith("aosp_"):
             score += 30
-        for brand in ["rising", "voltage", "mist", "crdroid", "derp", "infinity", "uwu", "lunaris", "pixel", "evolution", "matrixx", "superior", "bliss"]:
+        for brand in [
+            "rising", "voltage", "mist", "crdroid", "derp", "infinity", "uwu", "lunaris",
+            "pixel", "evolution", "matrixx", "superior", "bliss", "miku", "axion",
+            "alpha", "elixir", "spark", "flavor", "cherish", "stag", "ancient", "corvus",
+            "octavi", "paranoid", "aospa", "evox", "arrow", "havoc"
+        ]:
             if brand in n:
                 score += 50
         if size > 400 * 1024 * 1024:

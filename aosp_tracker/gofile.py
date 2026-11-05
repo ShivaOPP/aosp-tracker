@@ -271,7 +271,7 @@ def upload_single_file(
     url = f"https://{selected_server}.gofile.io/uploadfile"
 
     cmd = [
-        "curl", "-s", "--tcp-nodelay", "--tcp-fastopen", "--compressed",
+        "curl", "-s", "--tcp-nodelay", "--connect-timeout", "15",
         "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "-H", "Accept: application/json",
         "--keepalive-time", "10",
@@ -460,7 +460,8 @@ def upload_artifacts_batch(
                 if cancel_event and cancel_event.is_set():
                     return (fpath, None)
                 fsize = os.path.getsize(fpath)
-                timeout = max(180, int(fsize / (300 * 1024)))
+                timeout = max(300, int(fsize / (150 * 1024)))
+                # Try working server first
                 res = upload_single_file(
                     file_path=fpath,
                     folder_id=current_folder_id,
@@ -471,7 +472,32 @@ def upload_artifacts_batch(
                     active_procs=active_procs,
                     tracker=tracker,
                 )
-                return (fpath, res)
+                if res and res.get("id"):
+                    return (fpath, res)
+
+                # Retry with up to 3 alternative candidate servers if working_server failed or dropped
+                retries_left = 3
+                for fallback_srv in candidate_servers:
+                    if fallback_srv == working_server:
+                        continue
+                    if retries_left <= 0 or (cancel_event and cancel_event.is_set()):
+                        break
+                    retries_left -= 1
+                    logger.info("Retrying upload of %s to fallback server %s...", os.path.basename(fpath), fallback_srv)
+                    res = upload_single_file(
+                        file_path=fpath,
+                        folder_id=current_folder_id,
+                        token=current_token,
+                        server=fallback_srv,
+                        timeout=timeout,
+                        cancel_event=cancel_event,
+                        active_procs=active_procs,
+                        tracker=tracker,
+                    )
+                    if res and res.get("id"):
+                        return (fpath, res)
+
+                return (fpath, None)
 
             # Upload remaining files concurrently in thread pool
             with ThreadPoolExecutor(max_workers=min(max_workers, len(remaining_paths))) as pool:

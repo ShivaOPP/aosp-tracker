@@ -29,6 +29,7 @@ ROM_AVATARS = {
     "evolutionx": "https://avatars.githubusercontent.com/u/49089606?v=4",
     "evolution-x": "https://avatars.githubusercontent.com/u/49089606?v=4",
     "paranoidandroid": "https://avatars.githubusercontent.com/u/2967670?v=4",
+    "aospa": "https://avatars.githubusercontent.com/u/2967670?v=4",
     "arrowos": "https://avatars.githubusercontent.com/u/40351870?v=4",
     "havoc-os": "https://avatars.githubusercontent.com/u/38166549?v=4",
     "lunaris": "https://avatars.githubusercontent.com/u/193316573?v=4",
@@ -44,6 +45,31 @@ ROM_AVATARS = {
     "superioros": "https://avatars.githubusercontent.com/u/41551679?v=4",
     "bliss": "https://avatars.githubusercontent.com/u/10411319?v=4",
     "blissroms": "https://avatars.githubusercontent.com/u/10411319?v=4",
+    "miku": "https://avatars.githubusercontent.com/u/104190886?v=4",
+    "mikuui": "https://avatars.githubusercontent.com/u/104190886?v=4",
+    "miku-ui": "https://avatars.githubusercontent.com/u/104190886?v=4",
+    "axion": "https://avatars.githubusercontent.com/u/181827446?v=4",
+    "axionaosp": "https://avatars.githubusercontent.com/u/181827446?v=4",
+    "axion-aosp": "https://avatars.githubusercontent.com/u/181827446?v=4",
+    "alpha": "https://avatars.githubusercontent.com/u/119932062?v=4",
+    "alphadroid": "https://avatars.githubusercontent.com/u/119932062?v=4",
+    "elixir": "https://avatars.githubusercontent.com/u/98379989?v=4",
+    "projectelixir": "https://avatars.githubusercontent.com/u/98379989?v=4",
+    "spark": "https://avatars.githubusercontent.com/u/103525287?v=4",
+    "sparkos": "https://avatars.githubusercontent.com/u/103525287?v=4",
+    "flavor": "https://avatars.githubusercontent.com/u/152936735?v=4",
+    "flavoros": "https://avatars.githubusercontent.com/u/152936735?v=4",
+    "cherish": "https://avatars.githubusercontent.com/u/69796245?v=4",
+    "cherishos": "https://avatars.githubusercontent.com/u/69796245?v=4",
+    "stag": "https://avatars.githubusercontent.com/u/47545939?v=4",
+    "stagos": "https://avatars.githubusercontent.com/u/47545939?v=4",
+    "ancient": "https://avatars.githubusercontent.com/u/60455827?v=4",
+    "ancientos": "https://avatars.githubusercontent.com/u/60455827?v=4",
+    "corvus": "https://avatars.githubusercontent.com/u/61799042?v=4",
+    "corvusos": "https://avatars.githubusercontent.com/u/61799042?v=4",
+    "corvusrom": "https://avatars.githubusercontent.com/u/61799042?v=4",
+    "octavi": "https://avatars.githubusercontent.com/u/69906660?v=4",
+    "octavios": "https://avatars.githubusercontent.com/u/69906660?v=4",
     "aosp": "https://avatars.githubusercontent.com/u/81792437?v=4",
 }
 
@@ -86,12 +112,34 @@ def detect_rom_name_from_string(s: str) -> Optional[str]:
         return "SuperiorOS"
     if "bliss" in lower:
         return "BlissROM"
+    if "miku" in lower:
+        return "MikuUI"
+    if "axion" in lower:
+        return "AxionAOSP"
+    if "alpha" in lower or "alphadroid" in lower:
+        return "AlphaDroid"
+    if "elixir" in lower:
+        return "ProjectElixir"
+    if "spark" in lower:
+        return "SparkOS"
+    if "flavor" in lower:
+        return "FlavorOS"
+    if "cherish" in lower:
+        return "CherishOS"
+    if "stag" in lower:
+        return "StagOS"
+    if "ancient" in lower:
+        return "AncientOS"
+    if "corvus" in lower:
+        return "CorvusROM"
+    if "octavi" in lower:
+        return "OctaviOS"
     # Never match pixel-style or pixel_style theme repos as PixelOS
     if "pixelos" in lower or (lower == "pixel") or (lower.startswith("pixel_") and not any(k in lower for k in ["style", "prop", "framework", "launcher", "theme"])):
         return "PixelOS"
-    if "evolution" in lower:
+    if "evolution" in lower or "evox" in lower:
         return "EvolutionX"
-    if "paranoid" in lower:
+    if "paranoid" in lower or "aospa" in lower:
         return "ParanoidAndroid"
     if "arrow" in lower:
         return "ArrowOS"
@@ -104,7 +152,7 @@ def detect_rom_name_from_string(s: str) -> Optional[str]:
 
 def detect_rom_from_tree(build_dir: str) -> Optional[str]:
     """Check vendor directory or .repo manifests to find ROM identity."""
-    # 1. Check build directory name itself (e.g. /home/mrjellyxd/rise)
+    # 1. Check build directory name itself (e.g. /home/mrjellyxd/rise, /home/kelexine/ax)
     dir_name = os.path.basename(os.path.abspath(build_dir)).lower()
     if "rise" in dir_name or "rising" in dir_name:
         return "RisingOS"
@@ -112,10 +160,56 @@ def detect_rom_from_tree(build_dir: str) -> Optional[str]:
         return "VoltageOS"
     if "mist" in dir_name:
         return "Mist-OS"
+    if "crdroid" in dir_name:
+        return "crDroid"
+    if "derp" in dir_name:
+        return "DerpFest"
+    if "infinity" in dir_name:
+        return "Infinity-X"
     if "uwu" in dir_name:
         return "UwU-AOSP"
-    if "luna" in dir_name:
+    if "luna" in dir_name or "lunaris" in dir_name:
         return "Lunaris-AOSP"
+    if "matrixx" in dir_name:
+        return "ProjectMatrixx"
+    if "superior" in dir_name:
+        return "SuperiorOS"
+    if "bliss" in dir_name:
+        return "BlissROM"
+    if "miku" in dir_name:
+        return "MikuUI"
+    if "axion" in dir_name or dir_name == "ax":
+        return "AxionAOSP"
+    if "alpha" in dir_name:
+        return "AlphaDroid"
+    if "elixir" in dir_name:
+        return "ProjectElixir"
+    if "spark" in dir_name:
+        return "SparkOS"
+    if "flavor" in dir_name:
+        return "FlavorOS"
+    if "cherish" in dir_name:
+        return "CherishOS"
+    if "stag" in dir_name:
+        return "StagOS"
+    if "ancient" in dir_name:
+        return "AncientOS"
+    if "corvus" in dir_name:
+        return "CorvusROM"
+    if "octavi" in dir_name:
+        return "OctaviOS"
+    if "pixelos" in dir_name:
+        return "PixelOS"
+    if "evolution" in dir_name or "evox" in dir_name:
+        return "EvolutionX"
+    if "paranoid" in dir_name or "aospa" in dir_name:
+        return "ParanoidAndroid"
+    if "arrow" in dir_name:
+        return "ArrowOS"
+    if "havoc" in dir_name:
+        return "Havoc-OS"
+    if "lineage" in dir_name:
+        return "LineageOS"
 
     # 2. Authoritative check: .repo/manifests.git/config
     manifest_config = os.path.join(build_dir, ".repo", "manifests.git", "config")
@@ -134,7 +228,12 @@ def detect_rom_from_tree(build_dir: str) -> Optional[str]:
     if os.path.isdir(vendor_dir):
         try:
             entries = os.listdir(vendor_dir)
-            known_brands = ["uwu", "rising", "voltage", "mist", "crdroid", "derp", "infinity", "lunaris", "pixelos", "evolution"]
+            known_brands = [
+                "uwu", "rising", "voltage", "mist", "crdroid", "derp", "infinity",
+                "lunaris", "pixelos", "evolution", "miku", "axion", "alpha", "elixir",
+                "spark", "flavor", "cherish", "stag", "ancient", "matrixx", "superior",
+                "bliss", "corvus", "octavi", "paranoid", "aospa", "arrow", "havoc", "lineage"
+            ]
 
             # First pass: check for full ROM vendor tree (contains config, build, overlay, or release)
             for brand in known_brands:
@@ -295,6 +394,34 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                     info["rom"] = "SuperiorOS"
                 elif "BLISS_" in line or "BLISS_VERSION" in line:
                     info["rom"] = "BlissROM"
+                elif "MIKU_" in line or "MIKU_VERSION" in line or "MIKU_BUILD" in line:
+                    info["rom"] = "MikuUI"
+                elif "AXION_" in line or "AXION_VERSION" in line or "AXION_BUILD" in line:
+                    info["rom"] = "AxionAOSP"
+                elif "ALPHA_" in line or "ALPHADROID_" in line:
+                    info["rom"] = "AlphaDroid"
+                elif "ELIXIR_" in line or "ELIXIR_VERSION" in line:
+                    info["rom"] = "ProjectElixir"
+                elif "SPARK_" in line or "SPARK_VERSION" in line:
+                    info["rom"] = "SparkOS"
+                elif "FLAVOR_" in line or "FLAVOR_VERSION" in line:
+                    info["rom"] = "FlavorOS"
+                elif "CHERISH_" in line or "CHERISH_VERSION" in line:
+                    info["rom"] = "CherishOS"
+                elif "STAG_" in line or "STAG_VERSION" in line:
+                    info["rom"] = "StagOS"
+                elif "ANCIENT_" in line or "ANCIENT_VERSION" in line:
+                    info["rom"] = "AncientOS"
+                elif "CORVUS_" in line or "CORVUS_VERSION" in line:
+                    info["rom"] = "CorvusROM"
+                elif "OCTAVI_" in line or "OCTAVI_VERSION" in line:
+                    info["rom"] = "OctaviOS"
+                elif "PARANOID_" in line or "AOSPA_" in line:
+                    info["rom"] = "ParanoidAndroid"
+                elif "ARROW_" in line or "ARROW_VERSION" in line:
+                    info["rom"] = "ArrowOS"
+                elif "HAVOC_" in line or "HAVOC_VERSION" in line:
+                    info["rom"] = "Havoc-OS"
                 elif "PIXELOS_" in line:
                     info["rom"] = "PixelOS"
                 elif "EVOLUTION_" in line:

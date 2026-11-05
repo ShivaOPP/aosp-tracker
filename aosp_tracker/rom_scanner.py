@@ -185,11 +185,17 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         "/home/*/*/out/target/product/*",
         "/home/*/*/*/out/target/product/*",
         "/home/*/*/*/*/out/target/product/*",
+        "/home/*/out*/target/product/*",
         "/home/*/*/out*/target/product/*",
         "/home/*/*/*/out*/target/product/*",
         "/home/*/*/*/*/out*/target/product/*",
+        "/root/out/target/product/*",
         "/root/*/out/target/product/*",
         "/root/*/*/out/target/product/*",
+        "/root/*/out*/target/product/*",
+        "/root/*/*/out*/target/product/*",
+        "/data/*/out/target/product/*",
+        "/mnt/*/out/target/product/*",
     ]
 
     candidate_dirs = []
@@ -247,8 +253,19 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
                 if fpath not in files_for_upload and os.path.isfile(fpath):
                     files_for_upload.append(fpath)
 
-        total_bytes = sum(os.path.getsize(p) for p in files_for_upload if os.path.exists(p))
-        mtime = max(os.path.getmtime(p) for p in files_for_upload if os.path.exists(p))
+        # Fallback if no specific fastboot images or zip matched
+        if not files_for_upload:
+            for a in artifacts[:5]:
+                fpath = a.get("path")
+                if fpath and os.path.isfile(fpath) and fpath not in files_for_upload:
+                    files_for_upload.append(fpath)
+
+        if not files_for_upload:
+            continue
+
+        existing_upload_files = [p for p in files_for_upload if os.path.exists(p)]
+        total_bytes = sum(os.path.getsize(p) for p in existing_upload_files)
+        mtime = max((os.path.getmtime(p) for p in existing_upload_files), default=os.path.getmtime(pdir) if os.path.exists(pdir) else time.time())
         u_owner = pdir.split("/")[2] if pdir.startswith("/home/") else "root"
 
         results.append({
@@ -286,6 +303,8 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         "rising", "mist", "voltage", "crdroid", "derp", "infinity",
         "uwu", "luna", "pixel", "lineage", "evolution", "arrow", "havoc",
         "unofficial", "community", "gapps", "vanilla", "matrixx", "superior", "bliss",
+        "miku", "axion", "alpha", "elixir", "spark", "flavor", "cherish", "stag",
+        "ancient", "corvus", "octavi", "paranoid", "aospa", "evox",
     ]
 
     for fpath in standalone_files:
