@@ -6,6 +6,7 @@ Uses HTML parse_mode throughout to eliminate parsing errors with underscores.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -14,8 +15,10 @@ import logging
 import asyncio
 import threading
 import socket
+import urllib
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import Dict, Any, Optional, List, Tuple
 import psutil
 
