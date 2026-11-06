@@ -1764,7 +1764,7 @@ class AospMonitor:
                     f"{peer_url}/api/roms",
                     headers={"X-AOSP-Secret": secret} if secret else {},
                 )
-                resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=12.0)
+                resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=5.0)
                 data = json.loads(resp.read().decode("utf-8"))
                 peer_roms = data.get("roms", [])
                 p_name = peer.get("name") or "Peer Server"
