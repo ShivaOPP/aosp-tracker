@@ -41,6 +41,13 @@ from .formatter import (
     make_build_completed_keyboard,
     format_rom_list,
     make_rom_list_keyboard,
+    group_roms,
+    format_rom_catalog,
+    make_rom_catalog_keyboard,
+    format_device_selection,
+    make_device_selection_keyboard,
+    format_rom_device_detail,
+    make_rom_device_keyboard,
     format_gofile_upload_progress,
     format_gofile_upload_completed,
     make_gofile_open_keyboard,
@@ -225,6 +232,7 @@ class AospMonitor:
         self.active_kernels: Dict[int, KernelBuildSession] = {}
         self.active_uploads: Dict[str, Dict[str, Any]] = {}
         self.cached_multi_roms: List[Dict[str, Any]] = []
+        self.cached_rom_groups: Dict[str, Dict[str, Any]] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Telegram polling offset
@@ -1775,9 +1783,11 @@ class AospMonitor:
         for r_list in peer_rom_lists:
             all_roms.extend(r_list)
         self.cached_multi_roms = all_roms
+        groups = group_roms(all_roms)
+        self.cached_rom_groups = {g["group_id"]: g for g in groups}
         return all_roms
 
-    def handle_remote_upload_request(self, device: str, chat_id: str, rom_id: Optional[str] = None) -> Dict[str, Any]:
+    def handle_remote_upload_request(self, device: str, chat_id: str, rom_id: Optional[str] = None, mode: str = "all") -> Dict[str, Any]:
         """Triggered via HTTP API from peer server to start a GoFile upload of local artifacts."""
         try:
             roms = scan_all_roms(force_refresh=True)
@@ -1807,11 +1817,21 @@ class AospMonitor:
                             break
 
             if target_rom:
-                logger.info("Executing remote-requested GoFile upload for %s (%s) to chat %s", target_rom.get("name"), device, chat_id)
+                rom_to_upload = dict(target_rom)
+                if mode == "zip":
+                    zips = [f for f in target_rom.get("files_to_upload", []) if f.lower().endswith(".zip")]
+                    if zips:
+                        rom_to_upload["files_to_upload"] = zips
+                elif mode == "boot":
+                    boots = [f for f in target_rom.get("files_to_upload", []) if f.lower().endswith((".img", ".bin")) or "boot" in f.lower() or "dtbo" in f.lower()]
+                    if boots:
+                        rom_to_upload["files_to_upload"] = boots
+
+                logger.info("Executing remote-requested GoFile upload (%s mode) for %s (%s) to chat %s", mode, target_rom.get("name"), device, chat_id)
                 if self.loop and self.loop.is_running():
-                    asyncio.run_coroutine_threadsafe(self.start_gofile_upload(chat_id, target_rom), self.loop)
+                    asyncio.run_coroutine_threadsafe(self.start_gofile_upload(chat_id, rom_to_upload), self.loop)
                 else:
-                    asyncio.create_task(self.start_gofile_upload(chat_id, target_rom))
+                    asyncio.create_task(self.start_gofile_upload(chat_id, rom_to_upload))
                 return {"success": True, "message": f"Upload started for {device} on {self.server_name}"}
 
             logger.warning("Remote upload requested for device '%s' but no artifacts found on %s", device, self.server_name)
@@ -1885,8 +1905,10 @@ class AospMonitor:
                     r for r in all_roms
                     if not self.is_hidden_rom_or_user(r.get("username"), r.get("name"), r.get("directory"))
                 ]
-            list_text = format_rom_list(all_roms)
-            kb = make_rom_list_keyboard(all_roms)
+            groups = group_roms(all_roms)
+            self.cached_rom_groups = {g["group_id"]: g for g in groups}
+            list_text = format_rom_catalog(groups)
+            kb = make_rom_catalog_keyboard(groups)
             self.telegram.send_message(chat_id, list_text, parse_mode="HTML", reply_markup=kb)
 
         elif cmd == "/kernels":
@@ -1896,8 +1918,10 @@ class AospMonitor:
                 if not self.is_hidden_rom_or_user(r.get("username"), r.get("name"), r.get("directory"))
             ]
             filtered_roms = [r for r in all_roms if r.get("type") == "kernel"]
-            list_text = format_rom_list(filtered_roms)
-            kb = make_rom_list_keyboard(filtered_roms)
+            groups = group_roms(filtered_roms)
+            self.cached_rom_groups = {g["group_id"]: g for g in groups}
+            list_text = format_rom_catalog(groups, filter_type="kernel")
+            kb = make_rom_catalog_keyboard(groups)
             self.telegram.send_message(chat_id, list_text, parse_mode="HTML", reply_markup=kb)
 
         elif cmd == "/status":
@@ -1972,15 +1996,17 @@ class AospMonitor:
                 return
 
         if data == "rescan_roms":
-            self.telegram.answer_callback_query(cb_id, text="Scanning server for ROMs...")
+            self.telegram.answer_callback_query(cb_id, text="Scanning servers for ROMs...")
             roms = await self.get_all_multi_server_roms()
             if chat_id != self.hidden_user_target_chat_id:
                 roms = [
                     r for r in roms
                     if not self.is_hidden_rom_or_user(r.get("username"), r.get("name"), r.get("directory"))
                 ]
-            list_text = format_rom_list(roms)
-            kb = make_rom_list_keyboard(roms)
+            groups = group_roms(roms)
+            self.cached_rom_groups = {g["group_id"]: g for g in groups}
+            list_text = format_rom_catalog(groups)
+            kb = make_rom_catalog_keyboard(groups)
             self.telegram.edit_message(
                 chat_id=chat_id,
                 message_id=msg_id,
@@ -1990,8 +2016,88 @@ class AospMonitor:
                 reply_markup=kb,
             )
 
+        elif data.startswith("sel_grp:"):
+            group_id = data.split(":", 1)[1]
+            group = self.cached_rom_groups.get(group_id)
+            if not group:
+                roms = await self.get_all_multi_server_roms()
+                if chat_id != self.hidden_user_target_chat_id:
+                    roms = [r for r in roms if not self.is_hidden_rom_or_user(r.get("username"), r.get("name"), r.get("directory"))]
+                groups = group_roms(roms)
+                self.cached_rom_groups = {g["group_id"]: g for g in groups}
+                group = self.cached_rom_groups.get(group_id)
+
+            if not group:
+                self.telegram.answer_callback_query(cb_id, text="ROM group not found. Rescanning...", show_alert=True)
+                return
+
+            self.telegram.answer_callback_query(cb_id)
+            if len(group.get("items", [])) > 1 or len(group.get("devices", [])) > 1:
+                text = format_device_selection(group)
+                kb = make_device_selection_keyboard(group)
+            else:
+                single_rom = group["items"][0]
+                text = format_rom_device_detail(single_rom)
+                kb = make_rom_device_keyboard(single_rom, back_callback="rescan_roms")
+
+            self.telegram.edit_message(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                parse_mode="HTML",
+                min_interval_seconds=0.0,
+                reply_markup=kb,
+            )
+
+        elif data.startswith("sel_rom:"):
+            rom_id = data.split(":", 1)[1]
+            rom = None
+            for r in self.cached_multi_roms:
+                if r.get("id") == rom_id:
+                    rom = r
+                    break
+            if not rom:
+                rom = get_rom_by_id(rom_id)
+            if not rom:
+                all_roms = await self.get_all_multi_server_roms()
+                for r in all_roms:
+                    if r.get("id") == rom_id:
+                        rom = r
+                        break
+
+            if not rom:
+                self.telegram.answer_callback_query(cb_id, text="ROM not found. Click Rescan Server.", show_alert=True)
+                return
+
+            if self.is_hidden_rom_or_user(rom.get("username"), rom.get("name"), rom.get("directory")):
+                if chat_id != self.hidden_user_target_chat_id:
+                    self.telegram.answer_callback_query(cb_id, text="⛔ ROM not found or unavailable.", show_alert=True)
+                    return
+
+            self.telegram.answer_callback_query(cb_id)
+            back_cb = "rescan_roms"
+            for g in self.cached_rom_groups.values():
+                if any(it.get("id") == rom_id for it in g.get("items", [])):
+                    if len(g.get("items", [])) > 1 or len(g.get("devices", [])) > 1:
+                        back_cb = f"sel_grp:{g['group_id']}"
+                    break
+
+            text = format_rom_device_detail(rom)
+            kb = make_rom_device_keyboard(rom, back_callback=back_cb)
+            self.telegram.edit_message(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                parse_mode="HTML",
+                min_interval_seconds=0.0,
+                reply_markup=kb,
+            )
+
         elif data.startswith("dl:"):
-            rom_id = data[3:]
+            parts = data.split(":")
+            rom_id = parts[1]
+            upload_mode = parts[2] if len(parts) > 2 else "all"
+
             rom = None
             for r in self.cached_multi_roms:
                 if r.get("id") == rom_id:
@@ -2015,7 +2121,7 @@ class AospMonitor:
                 target_server = rom.get("server_name")
                 # If target server is a peer server, delegate the upload to the peer
                 if target_server and target_server != self.server_name and self.peer_servers:
-                    self.telegram.answer_callback_query(cb_id, text=f"Uploading {rom['name']} via {target_server}...")
+                    self.telegram.answer_callback_query(cb_id, text=f"Uploading {rom['name']} ({rom.get('device', '')}) via {target_server}...")
                     for peer in self.peer_servers:
                         p_name = peer.get("name") or peer.get("url")
                         if p_name.lower() == target_server.lower() or peer.get("url", "").lower() == target_server.lower():
@@ -2024,7 +2130,12 @@ class AospMonitor:
                                 peer_url = peer_url[:-7]
                             secret = peer.get("secret_key") or peer.get("secret") or self.secret_key
                             try:
-                                req_data = json.dumps({"rom_id": rom_id, "chat_id": chat_id, "device": rom.get("device")}).encode("utf-8")
+                                req_data = json.dumps({
+                                    "rom_id": rom_id,
+                                    "chat_id": chat_id,
+                                    "device": rom.get("device"),
+                                    "mode": upload_mode
+                                }).encode("utf-8")
                                 req = urllib.request.Request(
                                     f"{peer_url}/api/upload",
                                     data=req_data,
@@ -2038,8 +2149,18 @@ class AospMonitor:
                                 break
 
                 # Local upload
-                self.telegram.answer_callback_query(cb_id, text=f"Uploading {rom['name']} to GoFile...")
-                asyncio.create_task(self.start_gofile_upload(chat_id, rom))
+                rom_to_upload = dict(rom)
+                if upload_mode == "zip":
+                    zips = [f for f in rom.get("files_to_upload", []) if f.lower().endswith(".zip")]
+                    if zips:
+                        rom_to_upload["files_to_upload"] = zips
+                elif upload_mode == "boot":
+                    boots = [f for f in rom.get("files_to_upload", []) if f.lower().endswith((".img", ".bin")) or "boot" in f.lower() or "dtbo" in f.lower()]
+                    if boots:
+                        rom_to_upload["files_to_upload"] = boots
+
+                self.telegram.answer_callback_query(cb_id, text=f"Uploading {rom['name']} ({rom.get('device', '')}) to GoFile...")
+                asyncio.create_task(self.start_gofile_upload(chat_id, rom_to_upload))
             else:
                 self.telegram.answer_callback_query(cb_id, text="ROM not found. Please click Rescan Server.", show_alert=True)
 

@@ -132,6 +132,7 @@ def discover_artifacts(
     min_mtime: Optional[float] = None,
     max_items: int = 12,
     compute_hashes: bool = True,
+    pick_single_zip: bool = True,
 ) -> List[Dict[str, Any]]:
     """Scan product directory for build artifacts.
     
@@ -188,7 +189,8 @@ def discover_artifacts(
 
     if zips:
         zips.sort(key=zip_score, reverse=True)
-        zips = zips[:1]
+        if pick_single_zip:
+            zips = zips[:1]
 
     # Sort images: priority ones first in exact order, then others newest first
     def img_priority(item):

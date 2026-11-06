@@ -385,53 +385,188 @@ def make_build_completed_keyboard(rom_id_or_device: str, server_name: Optional[s
     }
 
 
-def format_rom_list(roms: List[Dict[str, Any]]) -> str:
-    """Format list of scanned ROMs and Kernels on the server."""
-    if not roms:
+def group_roms(roms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Group a list of ROM/Kernel builds by Name and Server for interactive device selection."""
+    groups_dict = {}
+    for r in roms:
+        r_name = r.get("name", "Custom ROM")
+        r_server = r.get("server_name", "Local Server")
+        r_type = r.get("type", "build")
+        key = (r_name.lower(), r_server.lower(), r_type)
+        if key not in groups_dict:
+            groups_dict[key] = {
+                "name": r_name,
+                "server_name": r_server,
+                "type": r_type,
+                "items": [],
+                "devices": [],
+            }
+        groups_dict[key]["items"].append(r)
+        dev = r.get("device", "")
+        if dev and dev != "unknown" and dev not in groups_dict[key]["devices"]:
+            groups_dict[key]["devices"].append(dev)
+
+    groups_list = []
+    for idx, (k, g) in enumerate(groups_dict.items()):
+        total_files = sum(item.get("file_count", 1) for item in g["items"])
+        total_bytes = sum(item.get("total_size_bytes", 0) for item in g["items"])
+        g["group_id"] = f"grp_{idx}"
+        g["total_files"] = total_files
+        g["total_bytes"] = total_bytes
+        g["total_size_formatted"] = format_file_size(total_bytes) if total_bytes > 0 else ""
+        groups_list.append(g)
+
+    return groups_list
+
+
+def format_rom_catalog(groups: List[Dict[str, Any]], filter_type: Optional[str] = None) -> str:
+    """Format catalog overview of ROMs and Kernels across all servers."""
+    if not groups:
+        item_word = "Kernels" if filter_type == "kernel" else "ROMs or Kernels"
         return (
-            "🔍 <b>No ROMs or Kernels Found on Server</b>\n\n"
-            "No compiled builds, downloaded ROM packages, or kernel releases were detected.\n"
+            f"🔍 <b>No {item_word} Found on Server</b>\n\n"
+            f"No compiled builds, downloaded ROM packages, or kernel releases were detected.\n"
             "Run a build or place packages on the server to make them downloadable."
         )
 
     lines = [
         "📂 <b>ROMs & Kernels Present on Server</b>\n",
-        "Select a build or kernel below to upload all files to GoFile and get download links:\n",
+        "Select a ROM or Kernel below to choose a device and download via GoFile:\n",
     ]
 
-    for idx, r in enumerate(roms, 1):
-        if r.get("type") == "kernel":
-            icon = "⚡"
-        elif r["type"] == "build":
-            icon = "📱"
+    for idx, g in enumerate(groups, 1):
+        icon = "⚡" if g["type"] == "kernel" else "📱"
+        dev_count = len(g["devices"])
+        if dev_count > 1:
+            dev_str = f"({', '.join(g['devices'][:3])}{'...' if dev_count > 3 else ''})"
+            dev_summary = f"{dev_count} device variants: <code>{', '.join(html.escape(d) for d in g['devices'][:4])}</code>"
+        elif dev_count == 1:
+            dev_str = f"({g['devices'][0]})"
+            dev_summary = f"Device: <code>{html.escape(g['devices'][0])}</code>"
         else:
-            icon = "📦"
-        tag = f"({r['device']})" if r.get("device") and r["device"] != "unknown" else ""
-        srv = f" [{r['server_name']}]" if r.get("server_name") else ""
-        lines.append(f"{idx}. {icon} <b>{html.escape(r['name'])}</b> {html.escape(tag)}{html.escape(srv)}")
-        lines.append(f"   • Package: <code>{html.escape(r['main_zip_name'])}</code>")
-        if r["type"] in ["build", "kernel"]:
-            lines.append(f"   • Artifacts: {r['file_count']} files ({r['total_size_formatted']} total)")
-        else:
-            lines.append(f"   • Size: {r['main_zip_size']}")
+            dev_str = ""
+            dev_summary = "Standalone package"
+
+        srv = f" [{html.escape(g['server_name'])}]" if g.get("server_name") else ""
+        lines.append(f"{idx}. {icon} <b>{html.escape(g['name'])}</b> {html.escape(dev_str)}{srv}")
+        lines.append(f"   • {dev_summary}")
+        lines.append(f"   • Artifacts: {g['total_files']} files ({g['total_size_formatted']} total)")
         lines.append("")
 
-    lines.append("<i>Click a button below to upload and download:</i>")
+    lines.append("<i>Click a button below to choose device variant & download:</i>")
     return "\n".join(lines)
 
 
-def make_rom_list_keyboard(roms: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Construct inline keyboard for ROM and Kernel selection."""
+def make_rom_catalog_keyboard(groups: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Construct inline keyboard for ROM and Kernel selection with device variant counts."""
     buttons = []
-    for r in roms[:25]:
-        dev_tag = f" ({r['device']})" if r.get("device") and r["device"] != "unknown" else ""
-        srv_tag = f" • {r['server_name']}" if r.get("server_name") else ""
-        prefix = "⚡ " if r.get("type") == "kernel" else "⬇️ "
-        btn_text = f"{prefix}{r['name']}{dev_tag}{srv_tag}"
-        buttons.append([{"text": btn_text, "callback_data": f"dl:{r['id']}"}])
+    for g in groups[:25]:
+        icon = "⚡ " if g["type"] == "kernel" else "📱 "
+        dev_count = len(g["devices"])
+        if dev_count > 1:
+            tag = f" ({dev_count} devices)"
+        elif dev_count == 1:
+            tag = f" ({g['devices'][0]})"
+        else:
+            tag = ""
+        srv_tag = f" • {g['server_name']}" if g.get("server_name") else ""
+        btn_text = f"{icon}{g['name']}{tag}{srv_tag}"
+        buttons.append([{"text": btn_text, "callback_data": f"sel_grp:{g['group_id']}"}])
 
     buttons.append([{"text": "🔄 Rescan Server", "callback_data": "rescan_roms"}])
     return {"inline_keyboard": buttons}
+
+
+def format_device_selection(group: Dict[str, Any]) -> str:
+    """Format device selection prompt when a ROM with multiple devices is clicked."""
+    icon = "⚡" if group.get("type") == "kernel" else "📱"
+    srv = f" [{html.escape(group['server_name'])}]" if group.get("server_name") else ""
+    lines = [
+        f"{icon} <b>{html.escape(group['name'])}</b>{srv}\n",
+        "Please select your target device variant below:",
+    ]
+    return "\n".join(lines)
+
+
+def make_device_selection_keyboard(group: Dict[str, Any]) -> Dict[str, Any]:
+    """Construct inline keyboard for device variants of a specific ROM."""
+    buttons = []
+    items = group.get("items", [])
+
+    # Check if there are duplicate device names among items
+    device_counts = {}
+    for it in items:
+        d = it.get("device") or "unknown"
+        device_counts[d] = device_counts.get(d, 0) + 1
+
+    for item in items[:25]:
+        icon = "⚡ " if item.get("type") == "kernel" else "📱 "
+        dev = item.get("device") or "unknown"
+        size = item.get("main_zip_size") or item.get("total_size_formatted", "")
+
+        if device_counts.get(dev, 0) > 1:
+            pkg_name = item.get("main_zip_name", "")
+            short_pkg = (pkg_name[:16] + "...") if len(pkg_name) > 19 else pkg_name
+            btn_text = f"{icon}{dev} • {short_pkg} ({size})" if size else f"{icon}{dev} • {short_pkg}"
+        else:
+            size_str = f" ({size})" if size else ""
+            btn_text = f"{icon}{dev}{size_str}"
+
+        buttons.append([{"text": btn_text, "callback_data": f"sel_rom:{item['id']}"}])
+
+    buttons.append([{"text": "🔙 Back to All ROMs", "callback_data": "rescan_roms"}])
+    return {"inline_keyboard": buttons}
+
+
+def format_rom_device_detail(rom: Dict[str, Any]) -> str:
+    """Format single device build details and GoFile upload options."""
+    icon = "⚡" if rom.get("type") == "kernel" else "📱"
+    dev_str = f" ({rom['device']})" if rom.get("device") and rom["device"] != "unknown" else ""
+    srv = f" [{html.escape(rom['server_name'])}]" if rom.get("server_name") else ""
+
+    lines = [
+        f"{icon} <b>{html.escape(rom['name'])}</b> {html.escape(dev_str)}{srv}\n",
+        f"• <b>Device:</b> <code>{html.escape(rom.get('device', 'unknown'))}</code>",
+        f"• <b>Package:</b> <code>{html.escape(rom.get('main_zip_name', ''))}</code>",
+        f"• <b>Total Size:</b> {rom.get('total_size_formatted', '')} ({rom.get('file_count', 0)} artifacts)",
+    ]
+    if rom.get("directory"):
+        lines.append(f"• <b>Directory:</b> <code>{html.escape(rom['directory'])}</code>")
+    lines.append("\nSelect download / upload option for GoFile:")
+    return "\n".join(lines)
+
+
+def make_rom_device_keyboard(rom: Dict[str, Any], back_callback: str = "rescan_roms") -> Dict[str, Any]:
+    """Construct inline keyboard for uploading specific artifacts of a ROM."""
+    rom_id = rom["id"]
+    file_count = rom.get("file_count", 1)
+    has_zip = bool(rom.get("main_zip_name") and rom["main_zip_name"] != "Partition Images")
+
+    upload_files = [p.lower() for p in rom.get("files_to_upload", [])]
+    has_boot = any("boot" in p or "recovery" in p or p.endswith(".img") for p in upload_files)
+
+    buttons = [
+        [{"text": f"🚀 Upload All Artifacts ({file_count} files)", "callback_data": f"dl:{rom_id}:all"}]
+    ]
+    if has_zip and file_count > 1:
+        buttons.append([{"text": "📦 Upload ROM Zip Only", "callback_data": f"dl:{rom_id}:zip"}])
+    if has_boot and file_count > 1:
+        buttons.append([{"text": "⚡ Upload Boot / Recovery Images", "callback_data": f"dl:{rom_id}:boot"}])
+
+    buttons.append([{"text": "🔙 Back", "callback_data": back_callback}])
+    return {"inline_keyboard": buttons}
+
+
+def format_rom_list(roms: List[Dict[str, Any]]) -> str:
+    """Format list of scanned ROMs and Kernels on the server (catalog view)."""
+    groups = group_roms(roms)
+    return format_rom_catalog(groups)
+
+
+def make_rom_list_keyboard(roms: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Construct inline keyboard for ROM and Kernel selection (catalog keyboard)."""
+    groups = group_roms(roms)
+    return make_rom_catalog_keyboard(groups)
 
 
 def format_gofile_upload_progress(

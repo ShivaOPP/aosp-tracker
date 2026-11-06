@@ -102,7 +102,11 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                     device = body_json.get("device", "")
                     chat_id = str(body_json.get("chat_id", ""))
                     rom_id = body_json.get("rom_id")
-                    res = self.start_upload_callback(device, chat_id, rom_id)
+                    mode = body_json.get("mode", "all")
+                    try:
+                        res = self.start_upload_callback(device, chat_id, rom_id, mode)
+                    except TypeError:
+                        res = self.start_upload_callback(device, chat_id, rom_id)
                     code = 200 if res.get("success") else 404
                     self.send_json_response(res, code)
                 except Exception as e:
@@ -122,6 +126,14 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                     self.send_json_response({"error": "Internal server error"}, 500)
             else:
                 self.send_json_response({"error": "Cancel callback not configured"}, 503)
+
+        elif path_clean in ["/api/restart", "/restart"]:
+            self.send_json_response({"success": True, "message": "Worker restarting"}, 200)
+            def _delayed_exit():
+                import time, os
+                time.sleep(0.8)
+                os._exit(0)
+            threading.Thread(target=_delayed_exit, daemon=True).start()
 
         else:
             self.send_json_response({"error": "Not found"}, 404)

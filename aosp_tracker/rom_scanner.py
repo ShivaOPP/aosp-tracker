@@ -169,6 +169,39 @@ def detect_kernel_metadata_from_tree(kernel_dir: str, out_dir: Optional[str] = N
     return kernel_title, device_display, localversion
 
 
+def extract_device_from_filename(filename: str, fallback_device: str = "unknown") -> str:
+    """Extract target device codename from an AOSP ROM or Kernel filename."""
+    if not filename:
+        return fallback_device
+    fname_no_ext = re.sub(r"\.(?:zip|img|tar|gz|json|sha256sum)$", "", filename, flags=re.IGNORECASE)
+    parts = re.split(r"[-_]", fname_no_ext)
+
+    blacklist = {
+        "axion", "mist", "voltage", "voltageos", "crdroid", "crdroidandroid", "lineage", "lineageos",
+        "rising", "risingos", "derpfest", "infinity", "uwu", "lunaris", "pixel", "evolution",
+        "matrixx", "superior", "bliss", "miku", "mikuui", "alpha", "elixir", "spark", "flavor",
+        "cherish", "stag", "ancient", "corvus", "octavi", "paranoid", "aospa", "evox", "arrow",
+        "havoc", "aosp", "unofficial", "official", "community", "gms", "gapps", "vanilla", "ota",
+        "fastboot", "signed", "release", "test", "flamegapps", "core", "micro", "arm64", "gki",
+        "generic", "user", "userdebug", "eng", "weekly", "nightly", "stable", "beta", "noesis"
+    }
+
+    for p in reversed(parts):
+        p_clean = p.strip()
+        p_low = p_clean.lower()
+        if not p_clean or p_clean.isdigit():
+            continue
+        if re.match(r"^v?[0-9]+(?:\.[0-9]+)*$", p_clean, re.IGNORECASE):
+            continue
+        if len(p_clean) == 8 and p_clean.isdigit():
+            continue
+        if p_low in blacklist:
+            continue
+        return p_clean
+
+    return fallback_device
+
+
 def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     """Scan the server for all available ROM builds and standalone ROM packages."""
     global _SCAN_CACHE, _LAST_SCAN_TIME
@@ -235,6 +268,11 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     for pat in search_patterns:
         candidate_dirs.extend(glob.glob(pat))
 
+    FASTBOOT_IMAGES = [
+        "boot.img", "vendor_boot.img", "recovery.img", "dtbo.img", "vbmeta.img",
+        "init_boot.img", "vbmeta_system.img", "vbmeta_vendor.img", "vendor_kernel_boot.img"
+    ]
+
     for pdir in candidate_dirs:
         if not os.path.isdir(pdir):
             continue
@@ -243,8 +281,8 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             continue
         seen_paths.add(pdir)
 
-        device = os.path.basename(pdir)
-        if device in ["obj", "installed-files", "fake_packages", "generic", "common", "install", "symbols", "temp", "tmp"]:
+        dir_device = os.path.basename(pdir)
+        if dir_device in ["obj", "installed-files", "fake_packages", "generic", "common", "install", "symbols", "temp", "tmp"]:
             continue
 
         # Look for soong.log
@@ -255,81 +293,91 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             soong_log = os.path.join(build_root, "out", "soong.log")
         rom_info = parse_soong_log(soong_log, build_root) if os.path.isfile(soong_log) else {}
 
-        artifacts = discover_artifacts(pdir, max_items=15, compute_hashes=False)
+        artifacts = discover_artifacts(pdir, max_items=30, compute_hashes=False, pick_single_zip=False)
         if not artifacts:
             continue
 
-        # If soong log found a real device name, use it
-        if rom_info.get("device") and rom_info["device"] not in ["generic", "_DIR"]:
-            device = rom_info["device"]
+        all_zips = [a for a in artifacts if a["type"] == "ZIP"]
+        non_zips = [a for a in artifacts if a["type"] != "ZIP"]
 
-        # Find primary zip
-        main_zip = None
-        for art in artifacts:
-            if art["type"] == "ZIP":
-                main_zip = art
-                break
+        if not all_zips:
+            all_zips = [None]
 
-        rom_name = rom_info.get("rom")
-        if not rom_name and main_zip:
-            rom_name = detect_rom_name_from_string(main_zip["name"])
-        if not rom_name:
-            rom_name = detect_rom_name_from_string(os.path.basename(build_root))
-        if not rom_name:
-            rom_name = detect_rom_name_from_string(os.path.basename(out_dir))
-        if not rom_name:
-            rom_name = detect_rom_name_from_string(device)
-        if not rom_name:
-            rom_name = "Custom ROM"
+        for current_zip in all_zips:
+            # Determine device:
+            # 1. From zip name (e.g. axion-...-giulia.zip or axion-...-giuliac.zip)
+            # 2. From directory name (e.g. giulia, giuliac)
+            # 3. From soong.log
+            detected_dev = dir_device
+            if current_zip:
+                zip_dev = extract_device_from_filename(current_zip["name"], fallback_device="")
+                if zip_dev and zip_dev.lower() not in ["generic", "arm64", "unknown", ""]:
+                    detected_dev = zip_dev
+            if detected_dev in ["unknown", "generic", ""] and rom_info.get("device"):
+                detected_dev = rom_info["device"]
+            if not detected_dev:
+                detected_dev = "unknown"
 
-        # Select essential files to upload: ROM zip, fastboot flashing images (boot, recovery, dtbo, etc.), and OTA json
-        # Excludes 1GB+ redundant raw partition images (system.img, vendor.img) already bundled inside the zip
-        FASTBOOT_IMAGES = [
-            "boot.img", "vendor_boot.img", "recovery.img", "dtbo.img", "vbmeta.img",
-            "init_boot.img", "vbmeta_system.img", "vbmeta_vendor.img", "vendor_kernel_boot.img"
-        ]
-        files_for_upload = []
-        if main_zip and os.path.isfile(main_zip["path"]):
-            files_for_upload.append(main_zip["path"])
+            # Determine ROM name
+            rom_name = rom_info.get("rom")
+            if not rom_name and current_zip:
+                rom_name = detect_rom_name_from_string(current_zip["name"])
+            if not rom_name:
+                rom_name = detect_rom_name_from_string(os.path.basename(build_root))
+            if not rom_name:
+                rom_name = detect_rom_name_from_string(os.path.basename(out_dir))
+            if not rom_name:
+                rom_name = detect_rom_name_from_string(detected_dev)
+            if not rom_name:
+                rom_name = "Custom ROM"
 
-        for a in artifacts:
-            fname = a["name"]
-            fpath = a["path"]
-            if fname.endswith(".json") or fname in FASTBOOT_IMAGES:
-                if fpath not in files_for_upload and os.path.isfile(fpath):
-                    files_for_upload.append(fpath)
+            files_for_upload = []
+            if current_zip and os.path.isfile(current_zip["path"]):
+                files_for_upload.append(current_zip["path"])
 
-        # Fallback if no specific fastboot images or zip matched
-        if not files_for_upload:
-            for a in artifacts[:5]:
-                fpath = a.get("path")
-                if fpath and os.path.isfile(fpath) and fpath not in files_for_upload:
-                    files_for_upload.append(fpath)
+            for a in non_zips:
+                fname = a["name"]
+                fpath = a["path"]
+                if fname.endswith(".json") or fname in FASTBOOT_IMAGES:
+                    if fpath not in files_for_upload and os.path.isfile(fpath):
+                        files_for_upload.append(fpath)
 
-        if not files_for_upload:
-            continue
+            if not files_for_upload:
+                for a in non_zips[:5]:
+                    fpath = a.get("path")
+                    if fpath and os.path.isfile(fpath) and fpath not in files_for_upload:
+                        files_for_upload.append(fpath)
 
-        existing_upload_files = [p for p in files_for_upload if os.path.exists(p)]
-        total_bytes = sum(os.path.getsize(p) for p in existing_upload_files)
-        mtime = max((os.path.getmtime(p) for p in existing_upload_files), default=os.path.getmtime(pdir) if os.path.exists(pdir) else time.time())
-        u_owner = pdir.split("/")[2] if pdir.startswith("/home/") else "root"
+            if not files_for_upload:
+                continue
 
-        results.append({
-            "id": f"rom_{len(results)}",
-            "type": "build",
-            "name": rom_name,
-            "device": device,
-            "directory": pdir,
-            "username": u_owner,
-            "main_zip_name": main_zip["name"] if main_zip else "Partition Images",
-            "main_zip_size": main_zip["size_formatted"] if main_zip else "",
-            "file_count": len(files_for_upload),
-            "total_size_bytes": total_bytes,
-            "total_size_formatted": format_file_size(total_bytes),
-            "files_to_upload": files_for_upload,
-            "artifacts_detail": artifacts,
-            "mtime": mtime,
-        })
+            existing_upload_files = [p for p in files_for_upload if os.path.exists(p)]
+            total_bytes = sum(os.path.getsize(p) for p in existing_upload_files)
+            mtime = (
+                os.path.getmtime(current_zip["path"])
+                if current_zip and os.path.exists(current_zip["path"])
+                else max((os.path.getmtime(p) for p in existing_upload_files), default=os.path.getmtime(pdir) if os.path.exists(pdir) else time.time())
+            )
+            u_owner = pdir.split("/")[2] if pdir.startswith("/home/") else "root"
+
+            entry_artifacts = ([current_zip] if current_zip else []) + non_zips
+
+            results.append({
+                "id": f"rom_{len(results)}",
+                "type": "build",
+                "name": rom_name,
+                "device": detected_dev,
+                "directory": pdir,
+                "username": u_owner,
+                "main_zip_name": current_zip["name"] if current_zip else "Partition Images",
+                "main_zip_size": current_zip["size_formatted"] if current_zip else "",
+                "file_count": len(files_for_upload),
+                "total_size_bytes": total_bytes,
+                "total_size_formatted": format_file_size(total_bytes),
+                "files_to_upload": files_for_upload,
+                "artifacts_detail": entry_artifacts,
+                "mtime": mtime,
+            })
 
     # 2. Scan Standalone ROM Zip Packages across all storage locations
     standalone_patterns = [
@@ -390,25 +438,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         rom_name = detect_rom_name_from_string(fname) or "Custom ROM"
 
         # Extract device if present in filename
-        device = "unknown"
-        for cand in [
-            "beryl", "fogos", "tulip", "marble", "veux", "sweet", "mondrian",
-            "peridot", "porsche", "dodge", "munch", "alioth", "apollo", "lemonadep",
-            "topaz", "tapas", "miatoll", "cheetah", "panther", "husky", "shiba"
-        ]:
-            if cand in lower:
-                device = cand
-                break
-
-        if device == "unknown":
-            m_end = re.search(r"[-_]([a-zA-Z0-9]+)\.zip$", fname, re.IGNORECASE)
-            if m_end and m_end.group(1).lower() not in ["gapps", "vanilla", "ota", "fastboot", "signed", "release", "official", "unofficial"]:
-                device = m_end.group(1)
-
-        if device == "unknown":
-            dev_match = re.search(r"[-_]([a-zA-Z0-9]+)[-_](?:[0-9]{8}|UNOFFICIAL|Community|OFFICIAL|GAPPS|VANILLA|Stable|Beta)", fname, re.IGNORECASE)
-            if dev_match and not dev_match.group(1).isdigit():
-                device = dev_match.group(1)
+        device = extract_device_from_filename(fname, fallback_device="unknown")
 
         files_to_upload = [fpath]
         dir_path = os.path.dirname(fpath)
