@@ -1725,10 +1725,14 @@ class AospMonitor:
     def get_local_roms(self) -> List[Dict[str, Any]]:
         """Return list of local ROMs formatted for multi-server aggregation."""
         roms = scan_all_roms(force_refresh=True)
+        s_name = self.server_name or socket.gethostname()
+        s_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', s_name.lower())
         results = []
         for r in roms:
             r_copy = dict(r)
-            r_copy["server_name"] = self.server_name or socket.gethostname()
+            r_copy["server_name"] = s_name
+            if not str(r_copy.get("id", "")).startswith(f"{s_slug}_"):
+                r_copy["id"] = f"{s_slug}_{r_copy.get('id', 'rom')}"
             results.append(r_copy)
         return results
 
@@ -1749,13 +1753,15 @@ class AospMonitor:
                     f"{peer_url}/api/roms",
                     headers={"X-AOSP-Secret": secret} if secret else {},
                 )
-                resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=4.0)
+                resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=12.0)
                 data = json.loads(resp.read().decode("utf-8"))
                 peer_roms = data.get("roms", [])
                 p_name = peer.get("name") or "Peer Server"
+                p_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', p_name.lower())
                 for pr in peer_roms:
-                    if not pr.get("server_name"):
-                        pr["server_name"] = p_name
+                    pr["server_name"] = p_name
+                    if not str(pr.get("id", "")).startswith(f"{p_slug}_"):
+                        pr["id"] = f"{p_slug}_{pr.get('id', 'rom')}"
                 return peer_roms
             except Exception as e:
                 logger.debug("Failed to fetch ROMs from peer %s: %s", peer.get("name"), e)
@@ -1774,8 +1780,10 @@ class AospMonitor:
             roms = scan_all_roms(force_refresh=True)
             target_rom = None
             if rom_id:
+                clean_id = rom_id.split("_", 2)[-1] if rom_id.count("_") >= 2 else rom_id
                 for r in roms:
-                    if r.get("id") == rom_id:
+                    r_id = str(r.get("id", ""))
+                    if r_id == rom_id or r_id == clean_id or rom_id.endswith(f"_{r_id}"):
                         target_rom = r
                         break
             if not target_rom and device:

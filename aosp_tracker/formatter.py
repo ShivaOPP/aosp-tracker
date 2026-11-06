@@ -407,7 +407,8 @@ def format_rom_list(roms: List[Dict[str, Any]]) -> str:
         else:
             icon = "📦"
         tag = f"({r['device']})" if r.get("device") and r["device"] != "unknown" else ""
-        lines.append(f"{idx}. {icon} <b>{html.escape(r['name'])}</b> {html.escape(tag)}")
+        srv = f" [{r['server_name']}]" if r.get("server_name") else ""
+        lines.append(f"{idx}. {icon} <b>{html.escape(r['name'])}</b> {html.escape(tag)}{html.escape(srv)}")
         lines.append(f"   • Package: <code>{html.escape(r['main_zip_name'])}</code>")
         if r["type"] in ["build", "kernel"]:
             lines.append(f"   • Artifacts: {r['file_count']} files ({r['total_size_formatted']} total)")
@@ -422,10 +423,11 @@ def format_rom_list(roms: List[Dict[str, Any]]) -> str:
 def make_rom_list_keyboard(roms: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Construct inline keyboard for ROM and Kernel selection."""
     buttons = []
-    for r in roms[:10]:
+    for r in roms[:25]:
         dev_tag = f" ({r['device']})" if r.get("device") and r["device"] != "unknown" else ""
+        srv_tag = f" • {r['server_name']}" if r.get("server_name") else ""
         prefix = "⚡ " if r.get("type") == "kernel" else "⬇️ "
-        btn_text = f"{prefix}{r['name']}{dev_tag}"
+        btn_text = f"{prefix}{r['name']}{dev_tag}{srv_tag}"
         buttons.append([{"text": btn_text, "callback_data": f"dl:{r['id']}"}])
 
     buttons.append([{"text": "🔄 Rescan Server", "callback_data": "rescan_roms"}])

@@ -179,23 +179,56 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     seen_paths = set()
 
-    # 1. Scan AOSP Build Product Directories
+    # 1. Scan AOSP Build Product Directories across all possible paths
     search_patterns = [
+        # /home
         "/home/*/out/target/product/*",
         "/home/*/*/out/target/product/*",
         "/home/*/*/*/out/target/product/*",
         "/home/*/*/*/*/out/target/product/*",
+        "/home/*/*/*/*/*/out/target/product/*",
         "/home/*/out*/target/product/*",
         "/home/*/*/out*/target/product/*",
         "/home/*/*/*/out*/target/product/*",
         "/home/*/*/*/*/out*/target/product/*",
+        "/home/*/*/*/*/*/out*/target/product/*",
+        # /root
         "/root/out/target/product/*",
         "/root/*/out/target/product/*",
         "/root/*/*/out/target/product/*",
+        "/root/*/*/*/out/target/product/*",
+        "/root/*/*/*/*/out/target/product/*",
         "/root/*/out*/target/product/*",
         "/root/*/*/out*/target/product/*",
-        "/data/*/out/target/product/*",
+        "/root/*/*/*/out*/target/product/*",
+        "/root/*/*/*/*/out*/target/product/*",
+        # /mnt/data and /mnt (Dedicated build disks)
+        "/mnt/data/out/target/product/*",
+        "/mnt/data/*/out/target/product/*",
+        "/mnt/data/*/*/out/target/product/*",
+        "/mnt/data/*/*/*/out/target/product/*",
+        "/mnt/data/*/*/*/*/out/target/product/*",
+        "/mnt/data/*/out*/target/product/*",
+        "/mnt/data/*/*/out*/target/product/*",
+        "/mnt/data/*/*/*/out*/target/product/*",
+        "/mnt/data/*/*/*/*/out*/target/product/*",
         "/mnt/*/out/target/product/*",
+        "/mnt/*/*/out/target/product/*",
+        "/mnt/*/*/*/out/target/product/*",
+        "/mnt/*/*/*/*/out/target/product/*",
+        "/mnt/*/out*/target/product/*",
+        "/mnt/*/*/out*/target/product/*",
+        "/mnt/*/*/*/out*/target/product/*",
+        "/mnt/*/*/*/*/out*/target/product/*",
+        # /data
+        "/data/out/target/product/*",
+        "/data/*/out/target/product/*",
+        "/data/*/*/out/target/product/*",
+        "/data/*/*/*/out/target/product/*",
+        "/data/*/*/*/*/out/target/product/*",
+        "/data/*/out*/target/product/*",
+        "/data/*/*/out*/target/product/*",
+        "/data/*/*/*/out*/target/product/*",
     ]
 
     candidate_dirs = []
@@ -215,13 +248,20 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             continue
 
         # Look for soong.log
-        build_root = os.path.abspath(os.path.join(pdir, "..", "..", ".."))
-        soong_log = os.path.join(build_root, "out", "soong.log")
+        out_dir = os.path.abspath(os.path.join(pdir, "..", ".."))
+        build_root = os.path.abspath(os.path.join(out_dir, ".."))
+        soong_log = os.path.join(out_dir, "soong.log")
+        if not os.path.isfile(soong_log):
+            soong_log = os.path.join(build_root, "out", "soong.log")
         rom_info = parse_soong_log(soong_log, build_root) if os.path.isfile(soong_log) else {}
 
         artifacts = discover_artifacts(pdir, max_items=15, compute_hashes=False)
         if not artifacts:
             continue
+
+        # If soong log found a real device name, use it
+        if rom_info.get("device") and rom_info["device"] not in ["generic", "_DIR"]:
+            device = rom_info["device"]
 
         # Find primary zip
         main_zip = None
@@ -234,7 +274,13 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         if not rom_name and main_zip:
             rom_name = detect_rom_name_from_string(main_zip["name"])
         if not rom_name:
-            rom_name = detect_rom_name_from_string(os.path.basename(build_root)) or "Custom ROM"
+            rom_name = detect_rom_name_from_string(os.path.basename(build_root))
+        if not rom_name:
+            rom_name = detect_rom_name_from_string(os.path.basename(out_dir))
+        if not rom_name:
+            rom_name = detect_rom_name_from_string(device)
+        if not rom_name:
+            rom_name = "Custom ROM"
 
         # Select essential files to upload: ROM zip, fastboot flashing images (boot, recovery, dtbo, etc.), and OTA json
         # Excludes 1GB+ redundant raw partition images (system.img, vendor.img) already bundled inside the zip
@@ -285,14 +331,29 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             "mtime": mtime,
         })
 
-    # 2. Scan Standalone ROM Zip Packages in Downloads and Home Directories
+    # 2. Scan Standalone ROM Zip Packages across all storage locations
     standalone_patterns = [
         "/home/*/Downloads/*.zip",
         "/home/*/Downloads/*/*.zip",
         "/home/*/*.zip",
         "/home/*/*/*.zip",
+        "/home/*/*/*/*.zip",
         "/root/Downloads/*.zip",
         "/root/*.zip",
+        "/root/*/*.zip",
+        "/root/*/*/*.zip",
+        "/mnt/data/*.zip",
+        "/mnt/data/*/*.zip",
+        "/mnt/data/*/*/*.zip",
+        "/mnt/data/*/*/*/*.zip",
+        "/mnt/data/Downloads/*.zip",
+        "/mnt/data/Downloads/*/*.zip",
+        "/mnt/*.zip",
+        "/mnt/*/*.zip",
+        "/mnt/*/*/*.zip",
+        "/data/*.zip",
+        "/data/*/*.zip",
+        "/data/*/*/*.zip",
     ]
 
     standalone_files = []
@@ -304,7 +365,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         "uwu", "luna", "pixel", "lineage", "evolution", "arrow", "havoc",
         "unofficial", "community", "gapps", "vanilla", "matrixx", "superior", "bliss",
         "miku", "axion", "alpha", "elixir", "spark", "flavor", "cherish", "stag",
-        "ancient", "corvus", "octavi", "paranoid", "aospa", "evox",
+        "ancient", "corvus", "octavi", "paranoid", "aospa", "evox", "aosp",
     ]
 
     for fpath in standalone_files:
@@ -319,8 +380,8 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         except Exception:
             continue
 
-        # Real ROM zips are at least 500 MB
-        if fsize < 500 * 1024 * 1024:
+        # Real ROM zips are at least 250 MB
+        if fsize < 250 * 1024 * 1024:
             continue
 
         if not any(k in lower for k in known_keywords):
