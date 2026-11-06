@@ -50,16 +50,17 @@ def get_system_stats(path: Optional[str] = None) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 2. Common dedicated build storage paths (prioritize /mnt/data)
+    # 2. Common dedicated build storage paths (prioritize /mnt/data and /data)
     for cand in ["/mnt/data", "/data"]:
         if os.path.exists(cand):
             candidates.append(cand)
 
-    # 3. Discovered real mountpoints with large storage (>10GB)
+    # 3. Discovered real mountpoints: pick largest overall partition
     try:
-        real_parts = []
+        root_usage = psutil.disk_usage("/")
+        real_parts = [("/", root_usage.total)]
         for p in psutil.disk_partitions(all=False):
-            if p.fstype in ["squashfs", "iso9660", "vfat", "tmpfs"] or p.mountpoint.startswith(("/snap", "/boot", "/run")):
+            if p.fstype in ["squashfs", "iso9660", "vfat", "tmpfs"] or p.mountpoint.startswith(("/snap", "/boot", "/run", "/var")):
                 continue
             try:
                 u = psutil.disk_usage(p.mountpoint)
@@ -72,9 +73,7 @@ def get_system_stats(path: Optional[str] = None) -> Dict[str, Any]:
             if mp not in candidates:
                 candidates.append(mp)
     except Exception:
-        pass
-
-    candidates.append("/")
+        candidates.append("/")
 
     disk_used_gb, disk_total_gb, disk_pct = 0.0, 0.0, 0.0
     selected_target = "/"
