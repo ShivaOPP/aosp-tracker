@@ -521,8 +521,8 @@ def make_device_selection_keyboard(group: Dict[str, Any]) -> Dict[str, Any]:
 def format_rom_device_detail(rom: Dict[str, Any]) -> str:
     """Format single device build details and GoFile upload options."""
     icon = "⚡" if rom.get("type") == "kernel" else "📱"
-    dev_str = f" ({rom['device']})" if rom.get("device") and rom["device"] != "unknown" else ""
-    srv = f" [{html.escape(rom['server_name'])}]" if rom.get("server_name") else ""
+    dev_str = f"({rom['device']}) " if rom.get("device") and rom["device"] != "unknown" else ""
+    srv = f"[{html.escape(rom['server_name'])}]" if rom.get("server_name") else ""
 
     lines = [
         f"{icon} <b>{html.escape(rom['name'])}</b> {html.escape(dev_str)}{srv}\n",
