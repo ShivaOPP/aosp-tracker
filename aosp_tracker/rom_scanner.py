@@ -300,6 +300,14 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         all_zips = [a for a in artifacts if a["type"] == "ZIP"]
         non_zips = [a for a in artifacts if a["type"] != "ZIP"]
 
+        # Filter out raw intermediate ota zips (e.g. lineage_giulia-ota.zip) if branded custom ROM zips exist
+        branded_zips = [
+            z for z in all_zips
+            if not (z["name"].endswith("-ota.zip") and (z["name"].startswith("lineage_") or z["name"].startswith("aosp_")))
+        ]
+        if branded_zips:
+            all_zips = branded_zips
+
         if not all_zips:
             all_zips = [None]
 
