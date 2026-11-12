@@ -202,6 +202,58 @@ def extract_device_from_filename(filename: str, fallback_device: str = "unknown"
     return fallback_device
 
 
+def get_path_owner(path: str) -> str:
+    """Resolve username for a given filesystem path."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.stat(path).st_uid).pw_name
+    except Exception:
+        parts = path.strip("/").split("/")
+        if len(parts) >= 2 and parts[0] == "home":
+            return parts[1]
+        return "root"
+
+
+def get_all_scan_bases() -> List[str]:
+    """Return all valid root directories to scan for ROM builds, packages, and kernels.
+    
+    Includes standard paths (/android, /home, /root, /mnt/data, /mnt, /data, /build, /work)
+    as well as dynamically detected mounted partitions with substantial storage.
+    """
+    bases = [
+        "/android",
+        "/home",
+        "/root",
+        "/mnt/data",
+        "/mnt",
+        "/data",
+        "/build",
+        "/builds",
+        "/work",
+        "/workspace",
+        "/srv",
+    ]
+    try:
+        import psutil
+        for p in psutil.disk_partitions(all=False):
+            mp = p.mountpoint
+            if mp == "/" or mp.startswith(("/snap", "/boot", "/run", "/var", "/sys", "/proc", "/dev", "/etc", "/usr", "/tmp")):
+                continue
+            if p.fstype in ["squashfs", "iso9660", "vfat", "tmpfs"]:
+                continue
+            if mp not in bases and os.path.isdir(mp):
+                bases.append(mp)
+    except Exception:
+        pass
+
+    valid = []
+    for b in bases:
+        b_clean = b.rstrip("/")
+        if b_clean and os.path.isdir(b_clean) and b_clean not in valid:
+            valid.append(b_clean)
+    return valid
+
+
 def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     """Scan the server for all available ROM builds and standalone ROM packages."""
     global _SCAN_CACHE, _LAST_SCAN_TIME
@@ -211,58 +263,28 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
 
     results: List[Dict[str, Any]] = []
     seen_paths = set()
+    bases = get_all_scan_bases()
 
     # 1. Scan AOSP Build Product Directories across all possible paths
-    search_patterns = [
-        # /home
-        "/home/*/out/target/product/*",
-        "/home/*/*/out/target/product/*",
-        "/home/*/*/*/out/target/product/*",
-        "/home/*/*/*/*/out/target/product/*",
-        "/home/*/*/*/*/*/out/target/product/*",
-        "/home/*/out*/target/product/*",
-        "/home/*/*/out*/target/product/*",
-        "/home/*/*/*/out*/target/product/*",
-        "/home/*/*/*/*/out*/target/product/*",
-        "/home/*/*/*/*/*/out*/target/product/*",
-        # /root
-        "/root/out/target/product/*",
-        "/root/*/out/target/product/*",
-        "/root/*/*/out/target/product/*",
-        "/root/*/*/*/out/target/product/*",
-        "/root/*/*/*/*/out/target/product/*",
-        "/root/*/out*/target/product/*",
-        "/root/*/*/out*/target/product/*",
-        "/root/*/*/*/out*/target/product/*",
-        "/root/*/*/*/*/out*/target/product/*",
-        # /mnt/data and /mnt (Dedicated build disks)
-        "/mnt/data/out/target/product/*",
-        "/mnt/data/*/out/target/product/*",
-        "/mnt/data/*/*/out/target/product/*",
-        "/mnt/data/*/*/*/out/target/product/*",
-        "/mnt/data/*/*/*/*/out/target/product/*",
-        "/mnt/data/*/out*/target/product/*",
-        "/mnt/data/*/*/out*/target/product/*",
-        "/mnt/data/*/*/*/out*/target/product/*",
-        "/mnt/data/*/*/*/*/out*/target/product/*",
-        "/mnt/*/out/target/product/*",
-        "/mnt/*/*/out/target/product/*",
-        "/mnt/*/*/*/out/target/product/*",
-        "/mnt/*/*/*/*/out/target/product/*",
-        "/mnt/*/out*/target/product/*",
-        "/mnt/*/*/out*/target/product/*",
-        "/mnt/*/*/*/out*/target/product/*",
-        "/mnt/*/*/*/*/out*/target/product/*",
-        # /data
-        "/data/out/target/product/*",
-        "/data/*/out/target/product/*",
-        "/data/*/*/out/target/product/*",
-        "/data/*/*/*/out/target/product/*",
-        "/data/*/*/*/*/out/target/product/*",
-        "/data/*/out*/target/product/*",
-        "/data/*/*/out*/target/product/*",
-        "/data/*/*/*/out*/target/product/*",
-    ]
+    search_patterns = []
+    for b in bases:
+        if b != "/home":
+            search_patterns.extend([
+                f"{b}/out/target/product/*",
+                f"{b}/out*/target/product/*",
+            ])
+        search_patterns.extend([
+            f"{b}/*/out/target/product/*",
+            f"{b}/*/out*/target/product/*",
+            f"{b}/*/*/out/target/product/*",
+            f"{b}/*/*/out*/target/product/*",
+            f"{b}/*/*/*/out/target/product/*",
+            f"{b}/*/*/*/out*/target/product/*",
+            f"{b}/*/*/*/*/out/target/product/*",
+            f"{b}/*/*/*/*/out*/target/product/*",
+            f"{b}/*/*/*/*/*/out/target/product/*",
+            f"{b}/*/*/*/*/*/out*/target/product/*",
+        ])
 
     candidate_dirs = []
     for pat in search_patterns:
@@ -366,7 +388,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
                 if current_zip and os.path.exists(current_zip["path"])
                 else max((os.path.getmtime(p) for p in existing_upload_files), default=os.path.getmtime(pdir) if os.path.exists(pdir) else time.time())
             )
-            u_owner = pdir.split("/")[2] if pdir.startswith("/home/") else "root"
+            u_owner = get_path_owner(pdir)
 
             entry_artifacts = ([current_zip] if current_zip else []) + non_zips
 
@@ -388,29 +410,18 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             })
 
     # 2. Scan Standalone ROM Zip Packages across all storage locations
-    standalone_patterns = [
-        "/home/*/Downloads/*.zip",
-        "/home/*/Downloads/*/*.zip",
-        "/home/*/*.zip",
-        "/home/*/*/*.zip",
-        "/home/*/*/*/*.zip",
-        "/root/Downloads/*.zip",
-        "/root/*.zip",
-        "/root/*/*.zip",
-        "/root/*/*/*.zip",
-        "/mnt/data/*.zip",
-        "/mnt/data/*/*.zip",
-        "/mnt/data/*/*/*.zip",
-        "/mnt/data/*/*/*/*.zip",
-        "/mnt/data/Downloads/*.zip",
-        "/mnt/data/Downloads/*/*.zip",
-        "/mnt/*.zip",
-        "/mnt/*/*.zip",
-        "/mnt/*/*/*.zip",
-        "/data/*.zip",
-        "/data/*/*.zip",
-        "/data/*/*/*.zip",
-    ]
+    standalone_patterns = []
+    for b in bases:
+        standalone_patterns.extend([
+            f"{b}/*.zip",
+            f"{b}/*/*.zip",
+            f"{b}/*/*/*.zip",
+            f"{b}/*/*/*/*.zip",
+            f"{b}/Downloads/*.zip",
+            f"{b}/Downloads/*/*.zip",
+            f"{b}/*/Downloads/*.zip",
+            f"{b}/*/Downloads/*/*.zip",
+        ])
 
     standalone_files = []
     for pat in standalone_patterns:
@@ -460,7 +471,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
 
         total_bytes = sum(os.path.getsize(p) for p in files_to_upload if os.path.exists(p))
         mtime = os.path.getmtime(fpath)
-        u_owner = fpath.split("/")[2] if fpath.startswith("/home/") else "root"
+        u_owner = get_path_owner(fpath)
 
         results.append({
             "id": f"rom_{len(results)}",
@@ -483,13 +494,17 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             "mtime": mtime,
         })
 
-    # 3. Scan Kernel Releases (e.g. ~/KernelReleases/*.zip, ~/AnyKernel3/*.zip)
-    kernel_patterns = [
-        "/home/*/KernelReleases/*.zip",
-        "/home/*/AnyKernel3/*.zip",
-        "/home/*/*/KernelReleases/*.zip",
-        "/home/*/*/AnyKernel3/*.zip",
-    ]
+    # 3. Scan Kernel Releases across all storage locations
+    kernel_patterns = []
+    for b in bases:
+        kernel_patterns.extend([
+            f"{b}/KernelReleases/*.zip",
+            f"{b}/AnyKernel3/*.zip",
+            f"{b}/*/KernelReleases/*.zip",
+            f"{b}/*/AnyKernel3/*.zip",
+            f"{b}/*/*/KernelReleases/*.zip",
+            f"{b}/*/*/AnyKernel3/*.zip",
+        ])
     candidate_kernel_zips = []
     for pat in kernel_patterns:
         candidate_kernel_zips.extend(glob.glob(pat))
@@ -508,7 +523,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             continue
 
         dir_path = os.path.dirname(kz)
-        user_name = kz.split("/")[2] if len(kz.split("/")) > 2 else "unknown"
+        user_name = get_path_owner(kz)
 
         # Determine kernel name & device
         kname = "Custom Kernel"
@@ -599,13 +614,17 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
             "mtime": mtime,
         })
 
-    # 4. Scan Compiled Kernel Boot Images (e.g. out/arch/arm64/boot/Image)
-    boot_image_patterns = [
-        "/home/*/kernels/*/out/arch/arm64/boot/Image",
-        "/home/*/kernel/*/out/arch/arm64/boot/Image",
-        "/home/*/kernel/out/arch/arm64/boot/Image",
-        "/home/*/*/out/arch/arm64/boot/Image",
-    ]
+    # 4. Scan Compiled Kernel Boot Images across all storage locations
+    boot_image_patterns = []
+    for b in bases:
+        boot_image_patterns.extend([
+            f"{b}/out/arch/arm64/boot/Image",
+            f"{b}/*/out/arch/arm64/boot/Image",
+            f"{b}/*/*/out/arch/arm64/boot/Image",
+            f"{b}/*/kernels/*/out/arch/arm64/boot/Image",
+            f"{b}/*/kernel/*/out/arch/arm64/boot/Image",
+            f"{b}/*/kernel/out/arch/arm64/boot/Image",
+        ])
     candidate_images = []
     for pat in boot_image_patterns:
         candidate_images.extend(glob.glob(pat))
@@ -623,8 +642,7 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
         out_dir = os.path.dirname(os.path.dirname(os.path.dirname(boot_dir)))
         kernel_dir = os.path.dirname(out_dir)
 
-        parts = img_path.split("/")
-        user_name = parts[2] if len(parts) > 2 else "unknown"
+        user_name = get_path_owner(img_path)
 
         # Detect metadata from kernel_dir and out_dir
         kname, kdevice, _ = detect_kernel_metadata_from_tree(kernel_dir, out_dir, user_name)

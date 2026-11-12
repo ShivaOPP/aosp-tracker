@@ -231,6 +231,7 @@ class AospMonitor:
         self.active_syncs: Dict[int, RepoSyncSession] = {}
         self.active_kernels: Dict[int, KernelBuildSession] = {}
         self.active_uploads: Dict[str, Dict[str, Any]] = {}
+        self.recent_completed_builds: Dict[str, Dict[str, Any]] = {}
         self.cached_multi_roms: List[Dict[str, Any]] = []
         self.cached_rom_groups: Dict[str, Dict[str, Any]] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -1062,6 +1063,32 @@ class AospMonitor:
             )
             logger.info("Build PID %d succeeded! Found %d artifacts.", session.pid, len(artifacts))
 
+            # Record recent completed build for instant upload handling
+            try:
+                main_zips = [a for a in artifacts if a.get("type") == "ZIP"]
+                main_zip = main_zips[0] if main_zips else None
+                upload_files = [a["path"] for a in artifacts if a.get("path") and os.path.exists(a["path"])]
+                if upload_files:
+                    total_bytes = sum(os.path.getsize(p) for p in upload_files)
+                    self.recent_completed_builds[session.device.lower().strip()] = {
+                        "id": f"build_{session.device.lower().strip()}",
+                        "type": "build",
+                        "name": session.rom_title or "Custom ROM",
+                        "device": session.device,
+                        "directory": product_dir,
+                        "username": session.username,
+                        "main_zip_name": main_zip["name"] if main_zip else "Partition Images",
+                        "main_zip_size": main_zip["size_formatted"] if main_zip else "",
+                        "file_count": len(upload_files),
+                        "total_size_bytes": total_bytes,
+                        "total_size_formatted": format_file_size(total_bytes),
+                        "files_to_upload": upload_files,
+                        "artifacts_detail": artifacts,
+                        "mtime": time.time(),
+                    }
+            except Exception as e:
+                logger.debug("Failed to record recent completed build: %s", e)
+
             reply_markup = make_build_completed_keyboard(session.device, self.server_name)
 
             if session.message_id:
@@ -1736,6 +1763,13 @@ class AospMonitor:
     def get_local_roms(self) -> List[Dict[str, Any]]:
         """Return list of local ROMs formatted for multi-server aggregation."""
         roms = scan_all_roms(force_refresh=True)
+        # Include recent completed builds if not yet indexed by scanner
+        indexed_devs = {r.get("device", "").lower().strip() for r in roms}
+        for dev_k, b_entry in list(self.recent_completed_builds.items()):
+            if dev_k not in indexed_devs:
+                if any(os.path.exists(p) for p in b_entry.get("files_to_upload", [])):
+                    roms.append(b_entry)
+
         s_name = self.server_name or socket.gethostname()
         s_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', s_name.lower())
         results = []
@@ -1815,6 +1849,8 @@ class AospMonitor:
                         if d_low in r.get("main_zip_name", "").lower() or d_low in r.get("directory", "").lower():
                             target_rom = r
                             break
+                if not target_rom:
+                    target_rom = self.recent_completed_builds.get(d_low)
 
             if target_rom:
                 rom_to_upload = dict(target_rom)
@@ -2192,6 +2228,8 @@ class AospMonitor:
                     if d_low in r.get("main_zip_name", "").lower() or d_low in r.get("directory", "").lower():
                         target_rom = r
                         break
+            if not target_rom:
+                target_rom = self.recent_completed_builds.get(d_low)
 
             if target_rom:
                 if self.is_hidden_rom_or_user(target_rom.get("username"), target_rom.get("name"), target_rom.get("directory")):
