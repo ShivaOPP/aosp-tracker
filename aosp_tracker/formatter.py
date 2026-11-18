@@ -497,20 +497,25 @@ def make_rom_device_keyboard(rom: Dict[str, Any], back_callback: str = "rescan_r
 
     hosts = rom.get("package_hosts", [])
     host_labels = (
-        ("pixeldrain", "Pixeldrain"), ("fuckingfast", "FuckingFast.net"),
-        ("storage_to", "Storage.to"),
-        ("sendit", "SendIt.sh"), ("temp_sh", "Temp.sh"),
-        ("x0at", "X0.at"), ("qurl", "QURL.sh"),
-        ("whalebone", "Whalebone"), ("uguu", "Uguu"), ("tmpfiles", "TmpFiles.org"),
+        ("pixeldrain", "Pixeldrain · plan limit"),
+        ("fuckingfast", "FuckingFast · no size cap"),
+        ("storage_to", "Storage.to · 25 GB"),
+        ("sendit", "SendIt.sh · 10 GB"),
+        ("temp_sh", "Temp.sh · 4 GB"),
+        ("x0at", "X0.at · 1 GiB"),
+        ("qurl", "QURL.sh · 500 MB"),
+        ("whalebone", "Whalebone · 250 MB"),
+        ("uguu", "Uguu · 128 MB"),
+        ("tmpfiles", "TmpFiles · 100 MB"),
     )
     mirrors = [{"text": label, "callback_data": f"dl:{rom_id}:pkg:{provider}"}
                for provider, label in host_labels if provider in hosts]
     buttons = [mirrors[index:index + 2] for index in range(0, len(mirrors), 2)]
-    buttons.append([{"text": f"↑  GoFile  ·  All files ({file_count})", "callback_data": f"dl:{rom_id}:all"}])
+    buttons.append([{"text": f"↑  GoFile · account limit · All ({file_count})", "callback_data": f"dl:{rom_id}:all"}])
     if has_zip:
-        buttons.append([{"text": "GoFile  ·  ZIP only", "callback_data": f"dl:{rom_id}:zip"}])
+        buttons.append([{"text": "GoFile · account limit · ZIP only", "callback_data": f"dl:{rom_id}:zip"}])
     if has_boot and file_count > 1:
-        buttons.append([{"text": "GoFile  ·  Boot images", "callback_data": f"dl:{rom_id}:boot"}])
+        buttons.append([{"text": "GoFile · account limit · Boot images", "callback_data": f"dl:{rom_id}:boot"}])
 
     buttons.append([{"text": "‹  Back", "callback_data": back_callback}])
     return {"inline_keyboard": buttons}

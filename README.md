@@ -229,9 +229,11 @@ aosp-tracker upload rom_0 --provider sendit
 ```
 
 The bot lists package hosts according to the package size and the upload
-capabilities of its build node. Some free hosts retain files only briefly or
-limit downloads. BuzzHeavier, BashUpload, Catbox/Litterbox and pomf.lain.la
-did not pass the live upload check in this environment, so they are not offered.
+capabilities of its build node. Host buttons show their per-file size limit;
+Pixeldrain and GoFile display a plan/account limit because it varies by account.
+Some free hosts retain files only briefly or limit downloads. BuzzHeavier,
+BashUpload, Catbox/Litterbox and pomf.lain.la did not pass the live upload check
+in this environment, so they are not offered.
 `file.io` no longer provides its former anonymous upload API, `oshi.at` was
 unreachable, and `Plowshare` is a client for other file hosts rather than a
 host. `0x0.st` prohibits automated build artifacts/backups. The remaining
