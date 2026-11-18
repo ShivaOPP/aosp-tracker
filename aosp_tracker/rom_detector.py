@@ -75,6 +75,113 @@ ROM_AVATARS = {
 
 DEFAULT_AVATAR = "https://avatars.githubusercontent.com/u/81792437?v=4"
 
+# Name aliases and GitHub owners used by the community ROM index. Keep aliases
+# explicit so words such as "mist", "alpha", or "pixel" do not match unrelated
+# project names. More specific entries are checked first.
+ROM_ALIASES = {
+    "RisingOS": ("risingos", "risingrevived", "risingosrevived", "rise", "rising"),
+    "VoltageOS": ("voltageos",),
+    "Mist-OS": ("projectmistos", "mist-os", "mistos"),
+    "crDroid": ("crdroidandroid", "crdroidx", "crdroid"),
+    "DerpFest": ("derpfestaosp", "derpfest"),
+    "Infinity-X": ("projectinfinityx", "infinityx"),
+    "UwU-AOSP": ("uwuaosp",),
+    "Lunaris-AOSP": ("lunaris-aosp", "lunarisaosp"),
+    "ProjectMatrixx": ("projectmatrixx", "matrixx"),
+    "SuperiorOS": ("superioros", "superior"),
+    "BlissROM": ("blissroms", "blissrom", "bliss"),
+    "MikuUI": ("miku-ui", "mikuui"),
+    "AxionAOSP": ("axionaosp",),
+    "AlphaDroid": ("alphadroid-project", "alphadroid"),
+    "ProjectElixir": ("projectelixir",),
+    "SparkOS": ("sparkos",),
+    "FlavorOS": ("flavoros",),
+    "CherishOS": ("cherishos",),
+    "StagOS": ("stagos",),
+    "AncientOS": ("ancientos",),
+    "CorvusROM": ("corvusrom", "corvus"),
+    "OctaviOS": ("octavios",),
+    "PixelOS": ("pixelos-aosp", "pixelos-clo", "pixelos-gm", "pixelos"),
+    "EvolutionX": ("evolution-x", "evolutionx", "evox"),
+    "ParanoidAndroid": ("aospa", "paranoidandroid", "paranoid"),
+    "ArrowOS": ("arrowos",),
+    "Havoc-OS": ("havoc-os", "havocos"),
+    "LineageOS": ("lineageos", "lineage"),
+    "Alch3myOS": ("alch3myos",),
+    "Altair ROM": ("altairrom",),
+    "AresOS": ("aresos-aosp", "aresos"),
+    "ASCP": ("pixelify-aosp", "ascp"),
+    "AstralOS": ("astralosproject", "astralos"),
+    "AviumUI": ("aviumui",),
+    "AyakaUI": ("ayakaui",),
+    "BaikalOS": ("baikalos",),
+    "CalyxOS": ("calyxos",),
+    "CharaROM": ("chararomandroid", "chararom"),
+    "DescartesOS": ("descartesos",),
+    "DiamaneOS": ("diamaneos",),
+    "Edith-AOSP": ("edith-aosp", "edithaosp"),
+    "Frosty": ("frosty-aosp", "frosty"),
+    "Fundamental OS": ("fundamentalos",),
+    "GrapheneOS": ("grapheneos",),
+    "Good4Nothing-AOSP": ("good4nothing-aosp", "good4nothing"),
+    "Halcyon": ("halcyonproject",),
+    "halogenOS": ("halogenos",),
+    "HaloUI": ("haloui-aosp", "haloui"),
+    "HertzifyOS": ("hertzifyos",),
+    "KleeUI": ("kleeui",),
+    "LightningOS": ("lightningos-aosp", "lightningos"),
+    "LMODroid": ("lmodroid", "libremobileos"),
+    "LumineDroid": ("luminedroid",),
+    "MIRACLO": ("miraclo-project", "miraclo"),
+    "MosaicOS": ("mosaic-os", "mosaicos"),
+    "Neoteric-OS": ("neoteric-os", "neotericos"),
+    "PenguinOS": ("project-penguinos", "penguinos"),
+    "PixelLines": ("pixellines",),
+    "Project Shinkai": ("shinkaiproject", "shinkai"),
+    "Project Yugen": ("yugenproject", "yugen"),
+    "Raven AOSP": ("raven-aosp", "ravenaosp"),
+    "Resurrection Remix": ("resurrectedremixos", "resurrectionremix"),
+    "RuriseOS": ("ruriseos",),
+    "StrixOS": ("project-strixos", "strixos"),
+    "The Clover Project": ("the-clover-project", "cloverproject"),
+    "The Diva Project": ("the-diva-project", "divaproject"),
+    "The XPerience Project": ("thexperienceproject", "xperience"),
+    "WitAqua": ("witaqua",),
+    "Wtf!OS": ("wtf-os", "wtfos"),
+    "YAAP": ("yaap",),
+    "AICP": ("aicp",),
+    "ArkUI": ("arkui-project", "arkui"),
+    "DarwinAOSP": ("darwinaosp",),
+    "LOS Modified": ("losmodified",),
+    "NervAOSP": ("nervaosp",),
+    "petalOS": ("petalftw", "petalos"),
+    "Project Sakura": ("projectsakura",),
+    "StatiXOS": ("statixos",),
+    "xdroid-oss": ("xdroid-oss", "xdroid"),
+}
+
+
+def _compact(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+_ROM_ALIAS_INDEX = {
+    _compact(alias): name
+    for name, aliases in ROM_ALIASES.items()
+    for alias in aliases
+}
+
+
+def _catalog_match(value: str) -> Optional[str]:
+    tokens = re.findall(r"[a-z0-9]+", value.lower())
+    for start in range(len(tokens)):
+        candidate = ""
+        for end in range(start, min(len(tokens), start + 4)):
+            candidate += tokens[end]
+            if candidate in _ROM_ALIAS_INDEX:
+                return _ROM_ALIAS_INDEX[candidate]
+    return None
+
 
 def get_rom_avatar(rom_name: str) -> str:
     """Resolve the avatar URL for a given ROM name."""
@@ -87,180 +194,48 @@ def get_rom_avatar(rom_name: str) -> str:
 
 
 def detect_rom_name_from_string(s: str) -> Optional[str]:
-    """Detect known ROM name from strings, giving priority to custom ROM brands."""
-    lower = s.lower()
-    # Check specific custom ROMs first (do NOT check lineage first, as many ROMs have lineage_product)
-    if "rising" in lower:
-        return "RisingOS"
-    if "voltage" in lower:
-        return "VoltageOS"
-    if "mist" in lower:
-        return "Mist-OS"
-    if "crdroid" in lower:
-        return "crDroid"
-    if "derp" in lower:
-        return "DerpFest"
-    if "infinity" in lower:
-        return "Infinity-X"
-    if "uwu" in lower:
-        return "UwU-AOSP"
-    if "lunaris" in lower:
-        return "Lunaris-AOSP"
-    if "matrixx" in lower:
-        return "ProjectMatrixx"
-    if "superior" in lower:
-        return "SuperiorOS"
-    if "bliss" in lower:
-        return "BlissROM"
-    if "miku" in lower:
-        return "MikuUI"
-    if "axion" in lower:
-        return "AxionAOSP"
-    if "alpha" in lower or "alphadroid" in lower:
-        return "AlphaDroid"
-    if "elixir" in lower:
-        return "ProjectElixir"
-    if "spark" in lower:
-        return "SparkOS"
-    if "flavor" in lower:
-        return "FlavorOS"
-    if "cherish" in lower:
-        return "CherishOS"
-    if "stag" in lower:
-        return "StagOS"
-    if "ancient" in lower:
-        return "AncientOS"
-    if "corvus" in lower:
-        return "CorvusROM"
-    if "octavi" in lower:
-        return "OctaviOS"
-    # Never match pixel-style or pixel_style theme repos as PixelOS
-    if "pixelos" in lower or (lower == "pixel") or (lower.startswith("pixel_") and not any(k in lower for k in ["style", "prop", "framework", "launcher", "theme"])):
-        return "PixelOS"
-    if "evolution" in lower or "evox" in lower:
-        return "EvolutionX"
-    if "paranoid" in lower or "aospa" in lower:
-        return "ParanoidAndroid"
-    if "arrow" in lower:
-        return "ArrowOS"
-    if "havoc" in lower:
-        return "Havoc-OS"
-    if "lineage" in lower and not lower.startswith("lineage_"):
-        return "LineageOS"
-    return None
+    """Resolve a ROM using known project names and repository owner aliases."""
+    return _catalog_match(s)
 
 
 def detect_rom_from_tree(build_dir: str) -> Optional[str]:
-    """Check vendor directory or .repo manifests to find ROM identity."""
-    # 1. Check build directory name itself (e.g. /home/mrjellyxd/rise, /home/kelexine/ax)
-    dir_name = os.path.basename(os.path.abspath(build_dir)).lower()
-    if "rise" in dir_name or "rising" in dir_name:
-        return "RisingOS"
-    if "voltage" in dir_name:
-        return "VoltageOS"
-    if "mist" in dir_name:
-        return "Mist-OS"
-    if "crdroid" in dir_name:
-        return "crDroid"
-    if "derp" in dir_name:
-        return "DerpFest"
-    if "infinity" in dir_name:
-        return "Infinity-X"
-    if "uwu" in dir_name:
-        return "UwU-AOSP"
-    if "luna" in dir_name or "lunaris" in dir_name:
-        return "Lunaris-AOSP"
-    if "matrixx" in dir_name:
-        return "ProjectMatrixx"
-    if "superior" in dir_name:
-        return "SuperiorOS"
-    if "bliss" in dir_name:
-        return "BlissROM"
-    if "miku" in dir_name:
-        return "MikuUI"
-    if "axion" in dir_name or dir_name == "ax":
-        return "AxionAOSP"
-    if "alpha" in dir_name:
-        return "AlphaDroid"
-    if "elixir" in dir_name:
-        return "ProjectElixir"
-    if "spark" in dir_name:
-        return "SparkOS"
-    if "flavor" in dir_name:
-        return "FlavorOS"
-    if "cherish" in dir_name:
-        return "CherishOS"
-    if "stag" in dir_name:
-        return "StagOS"
-    if "ancient" in dir_name:
-        return "AncientOS"
-    if "corvus" in dir_name:
-        return "CorvusROM"
-    if "octavi" in dir_name:
-        return "OctaviOS"
-    if "pixelos" in dir_name:
-        return "PixelOS"
-    if "evolution" in dir_name or "evox" in dir_name:
-        return "EvolutionX"
-    if "paranoid" in dir_name or "aospa" in dir_name:
-        return "ParanoidAndroid"
-    if "arrow" in dir_name:
-        return "ArrowOS"
-    if "havoc" in dir_name:
-        return "Havoc-OS"
-    if "lineage" in dir_name:
-        return "LineageOS"
+    """Inspect high-signal, bounded metadata without walking a huge Android tree."""
+    if not build_dir:
+        return None
+    root = os.path.abspath(build_dir)
 
-    # 2. Authoritative check: .repo/manifests.git/config
-    manifest_config = os.path.join(build_dir, ".repo", "manifests.git", "config")
-    if os.path.isfile(manifest_config):
+    # Manifest remote identifies a ROM before its project checkout is complete.
+    manifest_config = os.path.join(root, ".repo", "manifests.git", "config")
+    try:
+        with open(manifest_config, "r", errors="ignore") as f:
+            candidate = detect_rom_name_from_string(f.read(64 * 1024))
+        if candidate:
+            return candidate
+    except OSError:
+        pass
+
+    # ROM-specific vendor project names are strong signals during sync and build.
+    vendor_dir = os.path.join(root, "vendor")
+    try:
+        vendors = sorted(os.scandir(vendor_dir), key=lambda entry: entry.name.lower())[:160]
+    except OSError:
+        vendors = []
+    for entry in vendors:
+        candidate = detect_rom_name_from_string(entry.name)
+        if candidate:
+            return candidate
+
+    for relative in ("build/make/core/version_defaults.mk", "vendor/build/Android.mk", "vendor/build/core/main.mk"):
         try:
-            with open(manifest_config, "r", errors="ignore") as f:
-                content = f.read()
-                candidate = detect_rom_name_from_string(content)
-                if candidate and candidate != "LineageOS":
-                    return candidate
-        except Exception:
-            pass
+            with open(os.path.join(root, relative), "r", errors="ignore") as f:
+                candidate = detect_rom_name_from_string(f.read(48 * 1024))
+            if candidate:
+                return candidate
+        except OSError:
+            continue
 
-    # 3. Check vendor/<rom>
-    vendor_dir = os.path.join(build_dir, "vendor")
-    if os.path.isdir(vendor_dir):
-        try:
-            entries = os.listdir(vendor_dir)
-            known_brands = [
-                "uwu", "rising", "voltage", "mist", "crdroid", "derp", "infinity",
-                "lunaris", "pixelos", "evolution", "miku", "axion", "alpha", "elixir",
-                "spark", "flavor", "cherish", "stag", "ancient", "matrixx", "superior",
-                "bliss", "corvus", "octavi", "paranoid", "aospa", "arrow", "havoc", "lineage"
-            ]
-
-            # First pass: check for full ROM vendor tree (contains config, build, overlay, or release)
-            for brand in known_brands:
-                for item in entries:
-                    if brand in item.lower():
-                        item_path = os.path.join(vendor_dir, item)
-                        if os.path.isdir(item_path):
-                            try:
-                                subdirs = os.listdir(item_path)
-                                if any(k in subdirs for k in ["config", "build", "overlay", "release", "products"]):
-                                    res = detect_rom_name_from_string(item)
-                                    if res:
-                                        return res
-                            except Exception:
-                                pass
-
-            # Second pass: fallback if vendor directory doesn't have standard subdirs
-            for brand in known_brands:
-                for item in entries:
-                    if brand in item.lower():
-                        res = detect_rom_name_from_string(item)
-                        if res:
-                            return res
-        except Exception:
-            pass
-
-    return None
+    # Checkout directory is a weak fallback, used only after source metadata.
+    return detect_rom_name_from_string(os.path.basename(root))
 
 
 def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dict[str, Any]:
@@ -321,6 +296,15 @@ def parse_soong_log(soong_log_path: str, build_dir: Optional[str] = None) -> Dic
                     ts_match = re.match(r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})", line)
                     if ts_match:
                         info["start_time"] = ts_match.group(1)
+
+                # Newer ROMs often expose their name only through custom
+                # *_VERSION, *_BUILD, or PRODUCT variables in the Soong log.
+                if re.search(r"(?:ROM|OS|AOSP|VERSION|BUILD|PRODUCT|TARGET)", line, re.IGNORECASE):
+                    candidate = detect_rom_name_from_string(line)
+                    # Many ROM forks retain Lineage product identifiers, so
+                    # only use LineageOS as the final fallback below.
+                    if candidate and candidate != "LineageOS":
+                        info["rom"] = candidate
 
                 # TARGET_DEVICE matches: TARGET_DEVICE marble, TARGET_DEVICE = marble, TARGET_DEVICE := marble, TARGET_DEVICE="marble"
                 m = re.search(r"(?:^|[\s\[])TARGET_DEVICE\b\s*(?::=|[:=]|\s)\s*[\"']?([a-zA-Z0-9_-]+)[\"']?", line)

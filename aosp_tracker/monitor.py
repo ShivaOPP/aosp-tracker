@@ -28,7 +28,7 @@ from typing import Dict, Any, Optional, List, Tuple
 import psutil
 
 from .proto_parser import parse_build_progress, BuildProgress
-from .rom_detector import parse_soong_log, detect_rom_from_tree, get_rom_avatar
+from .rom_detector import parse_soong_log, detect_rom_from_tree, detect_rom_name_from_string, get_rom_avatar
 from .user_detector import resolve_user_profile, load_global_config, find_username_by_chat_id
 from .ogpreview import build_ogpreview_url
 from .artifacts import discover_artifacts, format_file_size
@@ -107,11 +107,13 @@ class BuildSession:
         self.pid = pid
         self.username = username
         self.build_dir = resolve_android_dir(build_dir) or build_dir
+        build_env: Dict[str, str] = {}
 
         out_candidate = None
         try:
             p = psutil.Process(pid)
             env = p.environ()
+            build_env = env
             top = env.get("TOP")
             if top and os.path.isdir(top):
                 self.build_dir = os.path.abspath(top)
@@ -123,6 +125,8 @@ class BuildSession:
 
         self.out_dir = out_candidate or os.path.join(self.build_dir, "out")
         self.start_time = start_time
+        self.selected_product = build_env.get("TARGET_PRODUCT", "").strip()
+        self.selected_device = build_env.get("TARGET_DEVICE", "").strip()
 
         self.progress_pb_path = os.path.join(self.out_dir, "build_progress.pb")
         self.soong_log_path = os.path.join(self.out_dir, "soong.log")
@@ -131,6 +135,16 @@ class BuildSession:
         # Profiles and metadata
         self.user_profile = resolve_user_profile(username)
         self.rom_info = parse_soong_log(self.soong_log_path, self.build_dir)
+
+        # lunch exports these values to the real build process. They can identify
+        # the chosen target before soong.log has recorded its first TARGET_* lines.
+        selected_product = self.selected_product
+        if selected_product and selected_product not in ("aosp", "generic"):
+            self.rom_info["product"] = selected_product
+            self.rom_info["device"] = self.selected_device or selected_product.rsplit("_", 1)[-1]
+            selected_rom = detect_rom_name_from_string(selected_product)
+            if selected_rom:
+                self.rom_info["rom"] = selected_rom
 
         self.rom_title = self.rom_info.get("rom", "AOSP")
         self.device = self.rom_info.get("device", "generic")
@@ -155,6 +169,12 @@ class BuildSession:
     def refresh_rom_info(self):
         """Re-read soong.log if metadata was incomplete during initial startup."""
         fresh = parse_soong_log(self.soong_log_path, self.build_dir)
+        if self.selected_product and self.selected_product not in ("aosp", "generic"):
+            fresh["product"] = self.selected_product
+            fresh["device"] = self.selected_device or self.selected_product.rsplit("_", 1)[-1]
+            selected_rom = detect_rom_name_from_string(self.selected_product)
+            if selected_rom:
+                fresh["rom"] = selected_rom
         if fresh.get("device") and fresh.get("device") not in ["generic", "_DIR"]:
             self.device = fresh.get("device")
         if fresh.get("rom") and fresh.get("rom") not in ["AOSP", "generic"]:
@@ -475,11 +495,17 @@ class AospMonitor:
                 if not is_soong:
                     continue
 
-                # STRICT: Ignore dumpvars / lunch / envsetup commands
+                # Soong is also launched by `lunch` to query variables. Those
+                # short configuration probes are not builds and must never emit
+                # a build-failed notification, even when a query takes a while.
+                args_lower = [str(arg).lower() for arg in cmd]
+                command_text = " ".join(args_lower)
                 if any(
-                    arg in ["--dumpvar-mode", "--dumpvars-mode"] or arg.startswith("--dumpvar")
-                    for arg in cmd
-                ):
+                    arg == "lunch"
+                    or arg.startswith("--dumpvar")
+                    or arg in {"--dumpvars-mode", "--dumpvar-mode"}
+                    for arg in args_lower
+                ) or any(token in command_text for token in ("--dumpvars-mode=", "--dumpvar-mode=", "get_build_var", "get_build_var_cached")):
                     continue
 
                 pid = p.info["pid"]
