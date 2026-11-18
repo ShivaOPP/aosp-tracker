@@ -8,11 +8,9 @@ transferred bytes, and ETA) for Telegram bots.
 import os
 import json
 import time
-import socket
 import logging
 import threading
 import subprocess
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
@@ -134,117 +132,8 @@ class UploadTracker:
         }
 
 
-FALLBACK_GOFILE_SERVERS = [
-    "store-eu-par-10",
-    "store-eu-par-13",
-    "store-eu-par-11",
-    "store-eu-par-4",
-    "store-eu-par-9",
-    "store-eu-par-2",
-    "store-eu-par-5",
-    "store-eu-par-8",
-    "store-eu-par-1",
-    "store-eu-par-12",
-    "store-eu-par-3",
-    "store10",
-    "store4",
-    "store6",
-    "store1",
-]
-
-_CACHED_SERVERS: List[str] = []
-_CACHED_SERVERS_TIME: float = 0.0
-_CACHED_GUEST_TOKEN: Optional[str] = None
-_CACHED_GUEST_TOKEN_TIME: float = 0.0
-
-
-def get_guest_token() -> Optional[str]:
-    """Obtain or reuse a GoFile guest account token for higher throughput and folder management."""
-    global _CACHED_GUEST_TOKEN, _CACHED_GUEST_TOKEN_TIME
-    now = time.time()
-    if _CACHED_GUEST_TOKEN and (now - _CACHED_GUEST_TOKEN_TIME) < 3600.0:
-        return _CACHED_GUEST_TOKEN
-    try:
-        req = urllib.request.Request(
-            "https://api.gofile.io/accounts",
-            data=b"",
-            headers={"User-Agent": "curl/7.81.0", "Accept": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data.get("status") == "ok":
-                tok = data.get("data", {}).get("token")
-                if tok:
-                    _CACHED_GUEST_TOKEN = tok
-                    _CACHED_GUEST_TOKEN_TIME = now
-                    return tok
-    except Exception as e:
-        logger.debug("Failed to acquire GoFile guest token: %s", e)
-    return None
-
-
-def get_ranked_gofile_servers(force_refresh: bool = False) -> List[str]:
-    """Dynamically discover and benchmark GoFile upload servers, returning them sorted by lowest latency."""
-    global _CACHED_SERVERS, _CACHED_SERVERS_TIME
-    now = time.time()
-    if not force_refresh and _CACHED_SERVERS and (now - _CACHED_SERVERS_TIME) < 300.0:
-        return _CACHED_SERVERS
-
-    candidate_names = set(FALLBACK_GOFILE_SERVERS)
-    try:
-        req = urllib.request.Request(
-            "https://api.gofile.io/servers",
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data.get("status") == "ok":
-                for s in data.get("data", {}).get("servers", []):
-                    name = s.get("name")
-                    if name:
-                        candidate_names.add(name)
-    except Exception as e:
-        logger.debug("GoFile server API fetch error: %s", e)
-
-    # Filter out 'upload' or non-store endpoints which proxy through Cloudflare
-    candidate_names = {s for s in candidate_names if s and s != "upload" and "upload" not in s.lower()}
-
-    def probe(name: str) -> Tuple[str, float]:
-        host = f"{name}.gofile.io"
-        try:
-            t0 = time.time()
-            s = socket.create_connection((host, 443), timeout=1.2)
-            dt = (time.time() - t0) * 1000.0
-            s.close()
-            return (name, dt)
-        except Exception:
-            return (name, 99999.0)
-
-    try:
-        with ThreadPoolExecutor(max_workers=min(16, len(candidate_names))) as pool:
-            ranked = list(pool.map(probe, candidate_names))
-        ranked.sort(key=lambda x: x[1])
-        valid_servers = [name for name, lat in ranked if lat < 90000.0]
-        if valid_servers:
-            _CACHED_SERVERS = valid_servers
-            _CACHED_SERVERS_TIME = now
-            return valid_servers
-    except Exception as e:
-        logger.debug("Error probing server latencies: %s", e)
-
-    _CACHED_SERVERS = FALLBACK_GOFILE_SERVERS
-    _CACHED_SERVERS_TIME = now
-    return FALLBACK_GOFILE_SERVERS
-
-
-def get_active_gofile_server(force_refresh: bool = False) -> str:
-    """Return the fastest active GoFile upload server."""
-    servers = get_ranked_gofile_servers(force_refresh)
-    return servers[0] if servers else "store-eu-par-10"
+# GoFile routes "upload" to the closest storage region. Fallbacks require no probes.
+UPLOAD_SERVERS = ("upload", "upload-ap-sgp", "upload-eu-par", "upload-na-phx")
 
 
 def upload_single_file(
@@ -265,87 +154,58 @@ def upload_single_file(
         return None
 
     filename = os.path.basename(file_path)
-    selected_server = server or get_active_gofile_server()
-    if not selected_server or selected_server == "upload":
-        selected_server = get_active_gofile_server()
+    selected_server = server or "upload"
     url = f"https://{selected_server}.gofile.io/uploadfile"
-
+    # libcurl's multipart syntax interprets commas and semicolons outside quotes.
+    quoted_path = file_path.replace("\\", "\\\\").replace('"', '\\"')
     cmd = [
-        "curl", "-s", "--tcp-nodelay", "--connect-timeout", "15",
-        "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "-H", "Accept: application/json",
-        "--keepalive-time", "10",
-        "--max-time", str(timeout),
-        "-X", "POST", url,
-        "-F", f"file=@{file_path}",
+        "curl", "--disable", "--silent", "--show-error", "--connect-timeout", "15",
+        "--max-time", str(timeout), "--speed-limit", "1024", "--speed-time", "120",
+        "--header", "@-", "--form", f'file=@"{quoted_path}"', "--url", url,
     ]
     if folder_id:
-        cmd.extend(["-F", f"folderId={folder_id}"])
-    if token:
-        cmd.extend(["-F", f"token={token}", "-H", f"Authorization: Bearer {token}"])
+        cmd.extend(["--form-string", f"folderId={folder_id}"])
 
-    proc = None
+    headers = f"Authorization: Bearer {token}\n" if token else ""
+    success = False
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if active_procs is not None:
-            active_procs.append(proc)
-        if tracker is not None:
-            tracker.register_proc(proc, file_path)
-
-        start_t = time.time()
-        while proc.poll() is None:
-            if cancel_event and cancel_event.is_set():
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                return None
-            if (time.time() - start_t) > (timeout + 15):
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                return None
-            time.sleep(0.3)
-
-        stdout, stderr = proc.communicate()
-        if active_procs is not None and proc in active_procs:
+        with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            if active_procs is not None:
+                active_procs.append(proc)
+            if tracker:
+                tracker.register_proc(proc, file_path)
             try:
-                active_procs.remove(proc)
-            except Exception:
-                pass
-
-        if cancel_event and cancel_event.is_set():
-            if tracker is not None:
-                tracker.unregister_proc(proc, False, file_path)
-            return None
-
-        success = False
-        res_data = None
-        if proc.returncode == 0 and stdout and stdout.strip().startswith("{"):
-            try:
-                res_json = json.loads(stdout)
-                if res_json.get("status") == "ok":
-                    success = True
-                    res_data = res_json.get("data", {})
-                else:
-                    logger.warning("GoFile returned non-ok from %s: %s", selected_server, res_json)
-            except Exception as e:
-                logger.warning("Failed to parse GoFile JSON response from %s: %s", selected_server, e)
-        else:
-            err_preview = (stdout.strip()[:200] if stdout else "") or (stderr.strip()[:200] if stderr else "")
-            logger.warning("GoFile upload error for %s on %s (rc=%d): %s", filename, selected_server, proc.returncode, err_preview)
-
-        if tracker is not None:
-            tracker.unregister_proc(proc, success, file_path)
-
-        return res_data
-    except Exception as e:
-        logger.error("Exception in curl upload for %s on %s: %s", filename, selected_server, e)
-        if tracker is not None and proc is not None:
-            tracker.unregister_proc(proc, False, file_path)
-
-    return None
+                while True:
+                    if cancel_event and cancel_event.is_set():
+                        proc.kill()
+                    try:
+                        stdout, stderr = proc.communicate(headers, timeout=1)
+                        break
+                    except subprocess.TimeoutExpired:
+                        headers = None
+                if cancel_event and cancel_event.is_set():
+                    return None
+                if proc.returncode:
+                    logger.warning("GoFile transfer failed on %s (curl %s)", selected_server, proc.returncode)
+                    return None
+                response = json.loads(stdout)
+                if response.get("status") != "ok":
+                    logger.warning("GoFile rejected %s on %s: %s", filename, selected_server, response.get("status"))
+                    return None
+                data = response.get("data") or {}
+                success = bool(data.get("id"))
+                return data if success else None
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                if active_procs is not None:
+                    active_procs.remove(proc)
+                if tracker:
+                    tracker.unregister_proc(proc, success, file_path)
+    except (ValueError, OSError) as exc:
+        logger.warning("GoFile transfer failed for %s: %s", filename, exc)
+        return None
 
 
 def upload_artifacts_batch(
@@ -397,7 +257,7 @@ def upload_artifacts_batch(
                     progress_callback(snap)
                 except Exception:
                     pass
-            time.sleep(1.0)
+            stop_ticker.wait(1.0)
 
     ticker_thread = threading.Thread(target=ticker_worker, daemon=True)
     ticker_thread.start()
@@ -407,14 +267,7 @@ def upload_artifacts_batch(
         first_name = os.path.basename(first_path)
         first_size = os.path.getsize(first_path)
 
-        # Acquire guest token if no token is configured
-        working_token = token or get_guest_token()
-
-        # Try active server with automatic retry across fallbacks if initial server rejects
-        candidate_servers = get_ranked_gofile_servers()
-        if not candidate_servers:
-            candidate_servers = [get_active_gofile_server()]
-
+        candidate_servers = UPLOAD_SERVERS
         first_res = None
         working_server = candidate_servers[0]
         for srv in candidate_servers:
@@ -424,9 +277,9 @@ def upload_artifacts_batch(
 
             first_res = upload_single_file(
                 file_path=first_path,
-                token=working_token,
+                token=token,
                 server=srv,
-                timeout=180,
+                timeout=max(300, int(first_size / (150 * 1024))),
                 cancel_event=cancel_event,
                 active_procs=active_procs,
                 tracker=tracker,
@@ -442,7 +295,7 @@ def upload_artifacts_batch(
             return results
 
         current_folder_id = first_res.get("parentFolder")
-        current_token = working_token or first_res.get("guestToken")
+        current_token = token or first_res.get("guestToken")
         download_page = first_res.get("downloadPage")
 
         results["uploaded_files"].append({
@@ -536,7 +389,7 @@ def upload_artifacts_batch(
 
     finally:
         stop_ticker.set()
-        ticker_thread.join(timeout=1.0)
+        ticker_thread.join()
         total_duration = time.time() - start_time
         results["duration_seconds"] = total_duration
         uploaded_bytes = sum(f.get("size_bytes", 0) for f in results["uploaded_files"])

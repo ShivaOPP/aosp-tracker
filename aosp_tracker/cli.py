@@ -13,6 +13,8 @@ import argparse
 from typing import Optional
 
 from .monitor import AospMonitor
+from .artifacts import format_file_size
+from .upload import HOSTS, upload_release
 from .user_detector import (
     resolve_user_profile,
     load_global_config,
@@ -223,7 +225,6 @@ def cmd_roms(args):
 def cmd_upload(args):
     """Upload a ROM's artifacts directly to GoFile."""
     from .rom_scanner import scan_all_roms, get_rom_by_id
-    from .gofile import upload_artifacts_batch
     roms = scan_all_roms()
     target = get_rom_by_id(args.rom_id)
     if not target:
@@ -235,7 +236,7 @@ def cmd_upload(args):
         print(f"Error: ROM '{args.rom_id}' not found. Use 'aosp-tracker roms' to list.")
         sys.exit(1)
 
-    print(f"Uploading {target['name']} ({target['device']}) to GoFile...")
+    print(f"Uploading {target['name']} ({target['device']}) to {HOSTS[args.provider]}...")
     def on_prog(snap, *args):
         if isinstance(snap, dict):
             pct = snap.get("pct", 0.0)
@@ -248,17 +249,17 @@ def cmd_upload(args):
             idx, total, fname, sz = snap, args[0], args[1], args[2]
             print(f"  [{idx}/{total}] Uploading {fname} ({sz})...")
 
-    res = upload_artifacts_batch(target["files_to_upload"], progress_callback=on_prog)
+    res = upload_release(target, args.provider, load_global_config(), progress_callback=on_prog)
     print()
     if res.get("success"):
         dur = f" in {res.get('duration_seconds', 0):.1f}s" if res.get('duration_seconds') else ""
         spd = f" (avg {res.get('avg_speed_mb_s', 0):.1f} MB/s)" if res.get('avg_speed_mb_s') else ""
         print(f"\n✅ Upload Successful{dur}{spd}!")
-        print(f"📂 GoFile Folder: {res['download_page']}")
+        print(f"🔗 Download: {res['download_page']}")
         for f in res["uploaded_files"]:
             print(f"  • {f['name']} ({f['size_formatted']})")
     else:
-        print("\n❌ Upload failed.")
+        sys.exit(res.get("error") or "Upload failed.")
 
 
 def cmd_daemon(args):
@@ -287,8 +288,10 @@ def main():
     p_roms.set_defaults(func=cmd_roms)
 
     # upload
-    p_upload = subparsers.add_parser("upload", help="Upload ROM files to GoFile")
+    p_upload = subparsers.add_parser("upload", help="Upload a release to a file host")
     p_upload.add_argument("rom_id", help="ROM ID (e.g. rom_0) or keyword (e.g. rising, peridot)")
+    p_upload.add_argument("--provider", choices=HOSTS, default="gofile",
+                          help="GoFile uploads all artifacts. Other hosts upload the main package.")
     p_upload.set_defaults(func=cmd_upload)
 
     # test

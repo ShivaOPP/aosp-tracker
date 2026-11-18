@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import logging
+import os
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger("aosp_tracker.telegram")
@@ -169,7 +170,7 @@ class TelegramClient:
         resp = self._post("getUpdates", data, timeout=timeout + 10)
         if resp and resp.get("ok"):
             return resp.get("result", [])
-        return []
+        raise ConnectionError("Telegram getUpdates failed")
 
     def set_my_commands(self, commands: List[Dict[str, str]]) -> bool:
         """Set the bot's registered command list in Telegram UI."""
@@ -186,54 +187,48 @@ class TelegramClient:
         timeout: int = 60,
     ) -> Optional[int]:
         """Send a document/file to Telegram chat (e.g. error.log)."""
-        import os
-        if not os.path.isfile(file_path):
-            return None
-
         chat_id = self.resolve_chat_id(chat_id)
         boundary = "----TelegramBoundary" + os.urandom(16).hex()
         filename = custom_filename or os.path.basename(file_path)
-
+        filename = filename.translate(str.maketrans({'"': "_", "\\": "_", "\r": "_", "\n": "_"}))
+        fields = {"chat_id": chat_id}
+        if caption:
+            fields["caption"] = caption
+        if reply_to_message_id:
+            fields["reply_to_message_id"] = str(reply_to_message_id)
+        preamble = "".join(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
+            for name, value in fields.items()
+        )
+        preamble += (f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+                     "Content-Type: text/plain\r\n\r\n")
+        prefix = preamble.encode()
+        ending = f"\r\n--{boundary}--\r\n".encode()
         try:
-            with open(file_path, "rb") as f:
-                file_bytes = f.read()
+            with open(file_path, "rb") as stream:
+                file_size = os.fstat(stream.fileno()).st_size
+                length = len(prefix) + file_size + len(ending)
 
-            body = []
-            # chat_id
-            body.append(
-                f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode("utf-8")
-            )
-            # caption
-            if caption:
-                body.append(
-                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}\r\n".encode("utf-8")
+                def body():
+                    yield prefix
+                    remaining = file_size
+                    while remaining:
+                        chunk = stream.read(min(remaining, 256 * 1024))
+                        if not chunk:
+                            raise OSError("Log truncated during upload")
+                        yield chunk
+                        remaining -= len(chunk)
+                    yield ending
+
+                req = urllib.request.Request(
+                    f"{self.base_url}/sendDocument", data=body(),
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                             "Content-Length": str(length)},
                 )
-            # reply_to_message_id
-            if reply_to_message_id:
-                body.append(
-                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"reply_to_message_id\"\r\n\r\n{reply_to_message_id}\r\n".encode("utf-8")
-                )
-            # document file
-            body.append(
-                f"--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n".encode("utf-8")
-            )
-            body.append(file_bytes)
-            body.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
-
-            full_body = b"".join(body)
-            url = f"{self.base_url}/sendDocument"
-            req = urllib.request.Request(
-                url,
-                data=full_body,
-                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            )
-
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                if result and result.get("ok"):
-                    msg_id = result.get("result", {}).get("message_id")
-                    logger.info("Sent document %s to chat %s (msg_id: %s)", filename, chat_id, msg_id)
-                    return msg_id
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result = json.load(resp)
+                if result.get("ok"):
+                    return result.get("result", {}).get("message_id")
         except Exception as e:
             logger.warning("Failed to send document %s to chat %s: %s", file_path, chat_id, e)
 

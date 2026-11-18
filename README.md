@@ -72,7 +72,7 @@ Duration: 26 minutes, 41 seconds
 
 Run the setup script with sudo:
 ```bash
-cd /home/ubuntu/Downloads/aosp
+cd /home/ubuntu/aosp-tracker
 sudo ./setup.sh
 ```
 
@@ -110,42 +110,57 @@ Any user on the system can configure their own settings:
 aosp-tracker profile --name "Rei 陈丽" --emoji "❄️" --chat-id "6340997509"
 ```
 
-### Multi-Server Setup (Primary + Worker Nodes)
+### Connect workers to Server 5
 
-Track multiple build servers concurrently with a single Telegram Bot:
+Server 5 polls Telegram for commands and calls each worker's status and task
+API. Workers continue to monitor their own builds and send Telegram build
+notifications using the same bot token. Server 5 needs a route to each
+worker's API. Use a private network or VPN for HTTP, or an HTTPS endpoint.
+Restrict the worker API port (default TCP 8088) to Server 5 in the worker's
+host firewall and cloud ingress rules.
 
-* **Primary Server (Server 1)** listens for Telegram slash commands (`/status`, `/roms`, etc.) and polls peer nodes.
-* **Worker Server (Server 2)** monitors local builds/syncs, sends notifications with server tags, and serves an internal status API.
+Run the following from each installed node's tracker checkout. Copy the updated
+checkout or the standalone `bin/aosp-node` script to nodes that lack it.
 
-**Server 1 (Primary) `/etc/aosp_bot/config.json`:**
-```json
-{
-  "server_name": "Server 1 (India)",
-  "listen_for_commands": true,
-  "enable_api": true,
-  "api_port": 8088,
-  "secret_key": "YOUR_SHARED_SECRET_KEY",
-  "peer_servers": [
-    {
-      "name": "Server 2",
-      "url": "http://137.23.44.237:8088/status",
-      "secret_key": "YOUR_SHARED_SECRET_KEY"
-    }
-  ]
-}
-```
+1. On the previous primary, if any, switch it to worker mode first. Repeat on
+   the other workers, giving each a distinct name.
 
-**Server 2 (Worker) `/etc/aosp_bot/config.json`:**
-```json
-{
-  "server_name": "Server 2",
-  "listen_for_commands": false,
-  "enable_api": true,
-  "api_port": 8088,
-  "secret_key": "YOUR_SHARED_SECRET_KEY",
-  "peer_servers": []
-}
-```
+   ```bash
+   sudo ./bin/aosp-node worker "Server 1"
+   ```
+
+   Enter a worker-specific API secret at the hidden prompt, or press Enter to
+   keep the existing one. The command saves the role and restarts the service.
+   For a fresh worker, initialize `/etc/aosp_bot/config.json` from the example,
+   set the existing fleet bot token and chat settings, set
+   `listen_for_commands` to false, clear the example `peer_servers`, and set a
+   real `secret_key` before running `sudo ./setup.sh`.
+
+2. On Server 5, activate Telegram polling.
+
+   ```bash
+   cd /home/ubuntu/aosp-tracker
+   sudo ./bin/aosp-node primary
+   sudo journalctl -u aosp-tracker -n 15 --no-pager
+   ```
+
+   Look for `Telegram updates polling loop started` and send `/status` to the
+   bot. Only Server 5 should poll Telegram.
+
+3. On Server 5, register each worker by its reachable address. Substitute the
+   actual name, IP or hostname, and port.
+
+   ```bash
+   sudo ./bin/aosp-node add-worker "Server 1" http://10.0.0.11:8088
+   ```
+
+   Enter that worker's API secret. The command checks its authenticated
+   `/status` response before adding or updating its `peer_servers` entry.
+   Server 5 reloads the list on its next monitor cycle. Send `/status` to see
+   the new node, or `/roms` to browse its releases.
+
+The helper writes the config atomically with owner-only permissions. Use
+`sudo` for local CLI commands that need to read this system configuration.
 
 ---
 
@@ -167,3 +182,40 @@ Track multiple build servers concurrently with a single Telegram Bot:
   ```bash
   sudo journalctl -u aosp-tracker -f
   ```
+
+
+## Release uploads
+
+Use `/search <device or ROM name>` to find a release. Admins can also open
+`/download` or **Choose upload host** on a build completion message. The package
+buttons transfer the displayed file directly from its build node. GoFile can
+also publish a folder of images or the complete artifact set. The transfer card
+shows bytes sent, throughput and elapsed-time estimates. **Cancel Upload** stops
+an active transfer. The node runs up to two manually requested transfers at once.
+
+| Destination | Files sent | Node setup |
+| --- | --- | --- |
+| GoFile | Selected artifacts in one folder | Existing configuration |
+| [Pixeldrain](https://pixeldrain.com/api) | Main release package | Set `PIXELDRAIN_API_KEY` |
+| [FuckingFast.net](https://fuckingfast.net/developers) | Main release package | Anonymous raw PUT |
+
+Install this revision on the Telegram primary and each uploading worker with
+`sudo ./setup.sh` from its checkout. Setup preserves the existing JSON config.
+Keep Telegram command polling enabled on the primary only. Each updated worker
+advertises its available package hosts to the primary.
+
+For Pixeldrain, place `PIXELDRAIN_API_KEY=your-key` in a root-owned, mode-0600
+`/etc/aosp_bot/upload.env` on the uploading node, then restart
+`aosp-tracker.service`. The CLI reads the variable from its own environment.
+The bot shows the Pixeldrain button when the node has a key.
+
+```bash
+aosp-tracker roms
+aosp-tracker upload rom_0 --provider fuckingfast
+aosp-tracker upload rom_0 --provider pixeldrain
+```
+
+Repeated library requests share a 20-second cache. **Refresh library** requests
+a fresh scan. Status and health requests run independently of catalog scans.
+If a worker stops responding, `/status` reports its last successful status
+response observed since the primary started, when available.

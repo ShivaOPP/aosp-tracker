@@ -6,9 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "=== Installing AOSP Telegram Tracker ==="
 
 # 0. Check and install dependencies
-if ! python3 -c "import psutil" >/dev/null 2>&1; then
-    echo "Installing python3-psutil dependency..."
-    sudo apt-get update -qq && sudo apt-get install -y -qq python3-psutil
+if ! python3 -c "import psutil" >/dev/null 2>&1 || ! command -v curl >/dev/null; then
+    echo "Installing python3-psutil and curl..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq python3-psutil curl
 fi
 
 # 1. Install CLI binary symlinks

@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/aosp_bot/upload.env
 User=root
 WorkingDirectory=/home/ubuntu/Downloads/aosp
 ExecStart=/usr/bin/python3 /home/ubuntu/Downloads/aosp/bin/aosp-tracker daemon
@@ -12,7 +13,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-KillMode=process
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

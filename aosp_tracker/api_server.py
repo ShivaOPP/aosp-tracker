@@ -4,19 +4,22 @@ Provides secure JSON endpoints for querying system resources, listing local ROMs
 and delegating GoFile uploads across worker nodes.
 """
 
+import inspect
 import json
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlsplit
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Callable, Dict, Any, Optional, List
 
 logger = logging.getLogger("aosp_tracker.api")
 
 
 class StatusRequestHandler(BaseHTTPRequestHandler):
+    timeout = 15
     get_status_callback: Optional[Callable[[], Dict[str, Any]]] = None
-    get_roms_callback: Optional[Callable[[], List[Dict[str, Any]]]] = None
-    start_upload_callback: Optional[Callable[[str, str, Optional[str]], Dict[str, Any]]] = None
+    get_roms_callback: Optional[Callable[..., List[Dict[str, Any]]]] = None
+    start_upload_callback: Optional[Callable[..., Dict[str, Any]]] = None
     cancel_upload_callback: Optional[Callable[[str], Dict[str, Any]]] = None
     expected_secret: Optional[str] = None
 
@@ -68,7 +71,9 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
         elif path_clean in ["/roms", "/api/roms"]:
             if self.get_roms_callback:
                 try:
-                    data = self.get_roms_callback()
+                    refresh = parse_qs(urlsplit(self.path).query).get("refresh") == ["1"]
+                    accepts_refresh = "force_refresh" in inspect.signature(self.get_roms_callback).parameters
+                    data = self.get_roms_callback(force_refresh=True) if refresh and accepts_refresh else self.get_roms_callback()
                     self.send_json_response({"roms": data, "count": len(data)}, 200)
                 except Exception as e:
                     logger.exception("Error fetching ROMs JSON: %s", e)
@@ -103,10 +108,22 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                     chat_id = str(body_json.get("chat_id", ""))
                     rom_id = body_json.get("rom_id")
                     mode = body_json.get("mode", "all")
-                    try:
-                        res = self.start_upload_callback(device, chat_id, rom_id, mode)
-                    except TypeError:
-                        res = self.start_upload_callback(device, chat_id, rom_id)
+                    provider = body_json.get("provider", "gofile")
+                    args = [device, chat_id, rom_id, mode, provider]
+                    signature = inspect.signature(self.start_upload_callback)
+                    # Older callbacks support only GoFile and may omit the artifact mode.
+                    for count in (5, 4, 3):
+                        try:
+                            signature.bind(*args[:count])
+                        except TypeError:
+                            continue
+                        if (count < 5 and provider != "gofile") or (count < 4 and mode != "all"):
+                            self.send_json_response({"success": False, "message": "Unsupported upload selection"}, 400)
+                            return
+                        res = self.start_upload_callback(*args[:count])
+                        break
+                    else:
+                        raise TypeError("Invalid upload callback signature")
                     code = 200 if res.get("success") else 404
                     self.send_json_response(res, code)
                 except Exception as e:
@@ -147,8 +164,8 @@ class StatusServer:
         host: str = "0.0.0.0",
         port: int = 8088,
         get_status_callback: Optional[Callable[[], Dict[str, Any]]] = None,
-        get_roms_callback: Optional[Callable[[], List[Dict[str, Any]]]] = None,
-        start_upload_callback: Optional[Callable[[str, str, Optional[str]], Dict[str, Any]]] = None,
+        get_roms_callback: Optional[Callable[..., List[Dict[str, Any]]]] = None,
+        start_upload_callback: Optional[Callable[..., Dict[str, Any]]] = None,
         cancel_upload_callback: Optional[Callable[[str], Dict[str, Any]]] = None,
         secret_key: Optional[str] = None,
     ):
@@ -159,7 +176,7 @@ class StatusServer:
         self.get_roms_callback = get_roms_callback
         self.start_upload_callback = start_upload_callback
         self.cancel_upload_callback = cancel_upload_callback
-        self.httpd: Optional[HTTPServer] = None
+        self.httpd: Optional[ThreadingHTTPServer] = None
         self.thread: Optional[threading.Thread] = None
 
     def start(self):
@@ -178,12 +195,13 @@ class StatusServer:
             expected_secret = secret
 
         try:
-            self.httpd = HTTPServer((self.host, self.port), CustomHandler)
+            self.httpd = ThreadingHTTPServer((self.host, self.port), CustomHandler)
             self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.thread.start()
             logger.info("HTTP Status & Task API listening on http://%s:%d", self.host, self.port)
         except Exception as e:
-            logger.warning("Could not start HTTP Status API on %s:%d: %s", self.host, self.port, e)
+            logger.error("Could not start HTTP Status API on %s:%d: %s", self.host, self.port, e)
+            raise
 
     def stop(self):
         """Shut down the HTTP API server cleanly."""

@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Set the daemon role or register one of its workers on an installed node."""
+
+import argparse
+import fcntl
+import getpass
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+CONFIG = Path("/etc/aosp_bot/config.json")
+UNIT = "aosp-tracker.service"
+
+
+def status_url(value):
+    url = urlsplit(value.strip())
+    if (url.scheme not in ("http", "https") or not url.hostname or url.username is not None
+            or url.query or url.fragment or url.path.rstrip("/") not in ("", "/status")):
+        raise ValueError("Use the worker's http(s) address with an optional /status path.")
+    return f"{url.scheme}://{url.netloc}/status"
+
+
+def usable_secret(value):
+    return bool(value and value.strip() and value.strip() != "YOUR_SHARED_SECRET_KEY")
+
+
+def write_config(path, config):
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temp:
+        try:
+            json.dump(config, temp, indent=2, ensure_ascii=False)
+            temp.write("\n")
+            temp.flush()
+            os.fsync(temp.fileno())
+            os.replace(temp.name, path)
+        finally:
+            Path(temp.name).unlink(missing_ok=True)
+
+
+class DirectWorkerRequest(HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None  # The worker secret belongs only to the supplied address.
+
+
+def configure(args, path):
+    with (path.parent / ".node-config.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        config = json.loads(path.read_text())
+        if args.role == "add-worker":
+            url = status_url(args.address)
+            peers = config.setdefault("peer_servers", [])
+            matches = [p for p in peers if p.get("name") == args.name or p.get("url", "").rstrip("/") == url]
+            if len(matches) > 1:
+                raise ValueError("The name and address match different workers. Use their existing names.")
+            entry = matches[0] if matches else {}
+            key = getpass.getpass("Worker API secret (Enter to reuse the configured key): ").strip()
+            key = key or entry.get("secret_key") or entry.get("secret") or config.get("secret_key")
+            if not usable_secret(key):
+                raise ValueError("Enter the secret configured on that worker.")
+            # Verify the destination before replacing any existing entry.
+            request = Request(url, headers={"X-AOSP-Secret": key})
+            with build_opener(DirectWorkerRequest).open(request, timeout=6) as response:
+                status = json.load(response)
+            if not isinstance(status, dict) or status.get("online") is not True:
+                raise ValueError("The address did not return an online AOSP worker status.")
+            entry.update(name=args.name, url=url, secret_key=key)
+            if not matches:
+                peers.append(entry)
+            write_config(path, config)
+            print(f"Connected to {args.name}. The primary loads its peer list on the next monitor cycle.")
+            return
+
+        token = str(config.get("bot_token") or "").strip()
+        if not token or token.startswith("YOUR_"):
+            raise ValueError(f"Set the fleet's Telegram bot_token in {path} first.")
+        config["listen_for_commands"] = args.role == "primary"
+        if args.role == "worker":
+            key = getpass.getpass("Worker API secret (Enter to keep this worker's existing key): ").strip()
+            key = key or config.get("secret_key")
+            if not usable_secret(key):
+                raise ValueError("Set a strong worker API secret.")
+            config.update(server_name=args.name, enable_api=True, secret_key=key)
+        write_config(path, config)
+
+    print(f"Saved {args.role} role. Restarting {UNIT}.", flush=True)
+    subprocess.run(["systemctl", "restart", UNIT], check=True)
+    subprocess.run(["systemctl", "is-active", "--quiet", UNIT], check=True)
+    print(f"{UNIT} is active. Check /status in Telegram to verify the fleet.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    roles = parser.add_subparsers(dest="role", required=True)
+    roles.add_parser("primary", help="Enable Telegram command polling on this server")
+    worker = roles.add_parser("worker", help="Enable the worker API and disable Telegram polling")
+    worker.add_argument("name")
+    peer = roles.add_parser("add-worker", help="Verify a worker and save it to the primary's peer list")
+    peer.add_argument("name")
+    peer.add_argument("address", help="Reachable worker address, e.g. http://10.0.0.12:8088")
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.exit(1, "Run this command with sudo on the host.\n")
+    try:
+        configure(args, CONFIG)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"{exc}\n")
+
+
+if __name__ == "__main__":
+    main()

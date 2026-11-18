@@ -9,6 +9,7 @@ import glob
 import time
 import re
 import zipfile
+import threading
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -18,7 +19,8 @@ from .rom_detector import detect_rom_name_from_string, parse_soong_log
 logger = logging.getLogger("aosp_tracker.rom_scanner")
 
 _SCAN_CACHE: List[Dict[str, Any]] = []
-_LAST_SCAN_TIME: float = 0.0
+_LAST_SCAN_TIME: float = float("-inf")
+_SCAN_LOCK = threading.Lock()
 _SCAN_TTL: float = 20.0  # Cache for 20 seconds
 
 
@@ -257,10 +259,16 @@ def get_all_scan_bases() -> List[str]:
 def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     """Scan the server for all available ROM builds and standalone ROM packages."""
     global _SCAN_CACHE, _LAST_SCAN_TIME
-    now = time.time()
-    if not force_refresh and _SCAN_CACHE and (now - _LAST_SCAN_TIME) < _SCAN_TTL:
-        return _SCAN_CACHE
+    requested_at = time.monotonic()
+    with _SCAN_LOCK:
+        if _LAST_SCAN_TIME >= requested_at or (not force_refresh and requested_at - _LAST_SCAN_TIME < _SCAN_TTL):
+            return list(_SCAN_CACHE)
+        _SCAN_CACHE = _scan_roms()
+        _LAST_SCAN_TIME = time.monotonic()
+        return list(_SCAN_CACHE)
 
+
+def _scan_roms() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     seen_paths = set()
     bases = get_all_scan_bases()
@@ -686,8 +694,6 @@ def scan_all_roms(force_refresh: bool = False) -> List[Dict[str, Any]]:
     for idx, r in enumerate(results):
         r["id"] = f"rom_{idx}"
 
-    _SCAN_CACHE = results
-    _LAST_SCAN_TIME = now
     return results
 
 

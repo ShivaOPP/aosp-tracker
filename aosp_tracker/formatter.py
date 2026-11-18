@@ -5,9 +5,10 @@ status matching custom ROM developer community templates.
 Uses HTML parse_mode to eliminate entity parsing bugs with underscores in filenames.
 """
 
+import hashlib
 import html
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import psutil
 
@@ -377,7 +378,7 @@ def make_build_completed_keyboard(rom_id_or_device: str, server_name: Optional[s
         "inline_keyboard": [
             [
                 {
-                    "text": "⬇️ Download Files (GoFile)",
+                    "text": "↑ Choose upload host",
                     "callback_data": cb_data,
                 }
             ]
@@ -407,10 +408,10 @@ def group_roms(roms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             groups_dict[key]["devices"].append(dev)
 
     groups_list = []
-    for idx, (k, g) in enumerate(groups_dict.items()):
+    for key, g in groups_dict.items():
         total_files = sum(item.get("file_count", 1) for item in g["items"])
         total_bytes = sum(item.get("total_size_bytes", 0) for item in g["items"])
-        g["group_id"] = f"grp_{idx}"
+        g["group_id"] = hashlib.blake2s("\0".join(key).encode(), digest_size=8).hexdigest()
         g["total_files"] = total_files
         g["total_bytes"] = total_bytes
         g["total_size_formatted"] = format_file_size(total_bytes) if total_bytes > 0 else ""
@@ -421,39 +422,16 @@ def group_roms(roms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def format_rom_catalog(groups: List[Dict[str, Any]], filter_type: Optional[str] = None) -> str:
     """Format catalog overview of ROMs and Kernels across all servers."""
+    title = "Kernel library" if filter_type == "kernel" else "Release library"
     if not groups:
-        item_word = "Kernels" if filter_type == "kernel" else "ROMs or Kernels"
-        return (
-            f"🔍 <b>No {item_word} Found on Server</b>\n\n"
-            f"No compiled builds, downloaded ROM packages, or kernel releases were detected.\n"
-            "Run a build or place packages on the server to make them downloadable."
-        )
-
-    lines = [
-        "📂 <b>ROMs & Kernels Present on Server</b>\n",
-        "Select a ROM or Kernel below to choose a device and download via GoFile:\n",
-    ]
-
-    for idx, g in enumerate(groups, 1):
-        icon = "⚡" if g["type"] == "kernel" else "📱"
-        dev_count = len(g["devices"])
-        if dev_count > 1:
-            dev_str = f"({', '.join(g['devices'][:3])}{'...' if dev_count > 3 else ''})"
-            dev_summary = f"{dev_count} device variants: <code>{', '.join(html.escape(d) for d in g['devices'][:4])}</code>"
-        elif dev_count == 1:
-            dev_str = f"({g['devices'][0]})"
-            dev_summary = f"Device: <code>{html.escape(g['devices'][0])}</code>"
-        else:
-            dev_str = ""
-            dev_summary = "Standalone package"
-
-        srv = f" [{html.escape(g['server_name'])}]" if g.get("server_name") else ""
-        lines.append(f"{idx}. {icon} <b>{html.escape(g['name'])}</b> {html.escape(dev_str)}{srv}")
-        lines.append(f"   • {dev_summary}")
-        lines.append(f"   • Artifacts: {g['total_files']} files ({g['total_size_formatted']} total)")
-        lines.append("")
-
-    lines.append("<i>Click a button below to choose device variant & download:</i>")
+        return f"📦 <b>{title}</b>\n\nNo matching releases. Use /roms to browse or refresh after a build."
+    files = sum(g["total_files"] for g in groups)
+    nodes = len({g["server_name"] for g in groups})
+    lines = [f"📦 <b>{title}</b>",
+             f"{len(groups)} releases · {files} artifacts · {nodes} {'node' if nodes == 1 else 'nodes'}",
+             "", "Choose a release to view its packages and upload options."]
+    if len(groups) > 25:
+        lines.append("Showing 25 releases. Use /search followed by a name or device to narrow the list.")
     return "\n".join(lines)
 
 
@@ -473,7 +451,7 @@ def make_rom_catalog_keyboard(groups: List[Dict[str, Any]]) -> Dict[str, Any]:
         btn_text = f"{icon}{g['name']}{tag}{srv_tag}"
         buttons.append([{"text": btn_text, "callback_data": f"sel_grp:{g['group_id']}"}])
 
-    buttons.append([{"text": "🔄 Rescan Server", "callback_data": "rescan_roms"}])
+    buttons.append([{"text": "↻ Refresh library", "callback_data": "rescan_roms"}])
     return {"inline_keyboard": buttons}
 
 
@@ -532,7 +510,10 @@ def format_rom_device_detail(rom: Dict[str, Any]) -> str:
     ]
     if rom.get("directory"):
         lines.append(f"• <b>Directory:</b> <code>{html.escape(rom['directory'])}</code>")
-    lines.append("\nSelect download / upload option for GoFile:")
+    if rom.get("package_hosts"):
+        lines.append("\nChoose a host for the main package, or send an artifact set to GoFile.")
+    else:
+        lines.append("\nChoose the artifacts to send to GoFile.")
     return "\n".join(lines)
 
 
@@ -540,18 +521,24 @@ def make_rom_device_keyboard(rom: Dict[str, Any], back_callback: str = "rescan_r
     """Construct inline keyboard for uploading specific artifacts of a ROM."""
     rom_id = rom["id"]
     file_count = rom.get("file_count", 1)
-    has_zip = bool(rom.get("main_zip_name") and rom["main_zip_name"] != "Partition Images")
+    has_zip = str(rom.get("main_zip_name", "")).lower().endswith(".zip")
 
     upload_files = [p.lower() for p in rom.get("files_to_upload", [])]
-    has_boot = any("boot" in p or "recovery" in p or p.endswith(".img") for p in upload_files)
+    has_boot = any(p.endswith((".img", ".bin")) for p in upload_files)
 
     buttons = [
-        [{"text": f"🚀 Upload All Artifacts ({file_count} files)", "callback_data": f"dl:{rom_id}:all"}]
+        [{"text": f"GoFile · All artifacts ({file_count})", "callback_data": f"dl:{rom_id}:all"}]
     ]
+    hosts = rom.get("package_hosts", [])
+    mirrors = [{"text": label, "callback_data": f"dl:{rom_id}:pkg:{provider}"}
+               for provider, label in (("pixeldrain", "Pixeldrain"), ("fuckingfast", "FuckingFast.net"))
+               if provider in hosts]
+    if mirrors:
+        buttons.insert(0, mirrors)
     if has_zip and file_count > 1:
-        buttons.append([{"text": "📦 Upload ROM Zip Only", "callback_data": f"dl:{rom_id}:zip"}])
+        buttons.append([{"text": "GoFile · ZIP only", "callback_data": f"dl:{rom_id}:zip"}])
     if has_boot and file_count > 1:
-        buttons.append([{"text": "⚡ Upload Boot / Recovery Images", "callback_data": f"dl:{rom_id}:boot"}])
+        buttons.append([{"text": "GoFile · Images", "callback_data": f"dl:{rom_id}:boot"}])
 
     buttons.append([{"text": "🔙 Back", "callback_data": back_callback}])
     return {"inline_keyboard": buttons}
@@ -580,6 +567,7 @@ def format_gofile_upload_progress(
     completed_files: int,
     total_files: int,
     current_filename: Optional[str] = None,
+    host: str = "GoFile",
 ) -> str:
     """Format live progress message while uploading to GoFile with real-time speed and progress bar."""
     dev_str = f" on {html.escape(device)}" if device and device != "unknown" else ""
@@ -588,27 +576,19 @@ def format_gofile_upload_progress(
 
     trans_str = format_file_size(transferred_bytes)
     total_str = format_file_size(total_bytes)
-    speed_str = f"{speed_mb_s:.1f} MB/s" if speed_mb_s > 0 else "Calculating..."
-
-    if eta_seconds is not None and eta_seconds > 0:
-        eta_str = format_duration(float(eta_seconds))
-    elif speed_mb_s > 0:
-        eta_str = "Calculating..."
-    else:
-        eta_str = "Calculating..."
-
     lines = [
-        f"☁️ <b>Uploading {html.escape(rom_name)}{dev_str} to GoFile...</b>\n",
-        f"📊 <b>Progress:</b> [{bar}] {pct_clamped:.1f}%",
-        f"   <b>Transferred:</b> {trans_str} / {total_str} ({completed_files}/{total_files} files)",
-        f"⚡ <b>Speed:</b> {speed_str}",
-        f"⏱️ <b>ETA:</b> {eta_str}",
+        f"↑ <b>{html.escape(host)} transfer</b>",
+        f"{html.escape(rom_name)}{dev_str}\n",
+        f"<code>{bar}</code>  <b>{pct_clamped:.1f}%</b>",
+        f"{trans_str} / {total_str} · {completed_files}/{total_files} files",
     ]
-
+    if speed_mb_s > 0:
+        rate = f"{speed_mb_s:.1f} MB/s"
+        if eta_seconds is not None:
+            rate += f" · {format_duration(eta_seconds)} left"
+        lines.append(rate)
     if current_filename:
-        lines.append(f"\n⏳ <b>Current File:</b> <code>{html.escape(current_filename)}</code>")
-
-    lines.append("\n<i>Optimizing streaming upload to GoFile servers... 🚀</i>")
+        lines.append(f"\n<code>{html.escape(current_filename)}</code>")
     return "\n".join(lines)
 
 
@@ -620,6 +600,7 @@ def format_gofile_upload_completed(
     failed_files: Optional[List[str]] = None,
     duration_seconds: Optional[float] = None,
     avg_speed_mb_s: Optional[float] = None,
+    host: str = "GoFile",
 ) -> str:
     """Format final GoFile upload completion message with links, duration, and speed stats."""
     dev_str = f" on {html.escape(device)}" if device and device != "unknown" else ""
@@ -627,9 +608,9 @@ def format_gofile_upload_completed(
     total_str = format_file_size(total_bytes) if total_bytes > 0 else ""
 
     lines = [
-        f"🎉 <b>GoFile Upload Completed!</b>\n",
+        f"✓ <b>Release ready · {html.escape(host)}</b>\n",
         f"📱 <b>ROM:</b> {html.escape(rom_name)}{dev_str}",
-        f"🔗 <b>Download Folder:</b> <a href=\"{download_url}\">{download_url}</a>",
+        f'🔗 <a href="{html.escape(download_url, quote=True)}">Open download</a>',
     ]
 
     if duration_seconds is not None and duration_seconds > 0:
@@ -649,7 +630,6 @@ def format_gofile_upload_completed(
     if failed_files:
         lines.append(f"\n⚠️ <i>Failed to upload {len(failed_files)} file(s).</i>")
 
-    lines.append("\n✨ <i>Click the folder link above to view and download all files.</i>")
     return "\n".join(lines)
 
 
@@ -667,13 +647,13 @@ def make_gofile_uploading_keyboard(upload_id: str) -> Dict[str, Any]:
     }
 
 
-def make_gofile_open_keyboard(download_url: str) -> Dict[str, Any]:
+def make_gofile_open_keyboard(download_url: str, host: str = "GoFile") -> Dict[str, Any]:
     """Button opening the GoFile folder in browser."""
     return {
         "inline_keyboard": [
             [
                 {
-                    "text": "🌐 Open GoFile Download Folder",
+                    "text": f"↗ Open {host}",
                     "url": download_url,
                 }
             ],
@@ -856,7 +836,7 @@ def make_kernel_completed_keyboard(download_url: Optional[str] = None) -> Dict[s
     if download_url:
         buttons.append([
             {
-                "text": "🌐 Open GoFile Download Folder",
+                "text": f"↗ Open {host}",
                 "url": download_url,
             }
         ])
@@ -903,8 +883,7 @@ def format_server_status_block(
             pct_val = b.get("pct", -1.0)
             pct_str = f"{pct_val:.1f}%" if pct_val >= 0 else "compiling"
             lines.append(f"  • {html.escape(str(b.get('rom_title', 'ROM')))} ({html.escape(str(b.get('device', 'device')))}) — {pct_str} [PID {b.get('pid')}]")
-    else:
-        lines.append("⚙️ <b>Active ROM Builds:</b> None running")
+
 
     active_kernel_count = len(kernels)
     if active_kernel_count > 0:
@@ -913,8 +892,7 @@ def format_server_status_block(
             pct_val = k.get("pct", -1.0)
             pct_str = f"{pct_val:.1f}%" if pct_val >= 0 else "compiling"
             lines.append(f"  • {html.escape(str(k.get('kernel_title', 'Kernel')))} ({html.escape(str(k.get('device', 'device')))}) — {pct_str} [PID {k.get('pid')}]")
-    else:
-        lines.append("⚡ <b>Active Kernel Builds:</b> None running")
+
 
     active_sync_count = len(syncs)
     if active_sync_count > 0:
@@ -924,15 +902,15 @@ def format_server_status_block(
             synced = s.get("synced_projects", 0)
             pct = (synced / tot * 100.0) if tot > 0 else 0.0
             lines.append(f"  • {html.escape(str(s.get('rom_title', 'ROM')))} ({html.escape(str(s.get('branch', 'default')))}) — {pct:.1f}% ({synced}/{tot} projects) [PID {s.get('pid')}]")
-    else:
-        lines.append("🔄 <b>Active Source Syncs:</b> None running")
+    if not (builds or kernels or syncs):
+        lines.append("No active builds or syncs.")
 
     return "\n".join(lines)
 
 
 def format_multi_server_status(servers: List[Dict[str, Any]]) -> str:
     """Format combined status across multiple servers."""
-    header = f"📊 <b>AOSP Tracker Server Status ({len(servers)} Nodes)</b>\n"
+    header = f"◉ <b>Build fleet</b>  ·  {sum(s.get('online', True) for s in servers)}/{len(servers)} online\n"
     blocks = []
     for s in servers:
         block = format_server_status_block(
@@ -944,6 +922,9 @@ def format_multi_server_status(servers: List[Dict[str, Any]]) -> str:
             online=s.get("online", True),
             error=s.get("error"),
         )
+        if not s.get("online", True) and s.get("last_seen"):
+            last_seen = datetime.fromtimestamp(s["last_seen"], timezone.utc)
+            block += f"\nLast response · {last_seen:%d %b %H:%M UTC}"
         blocks.append(block)
 
     body = "\n\n────────────────────\n\n".join(blocks)
