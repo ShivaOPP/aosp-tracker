@@ -28,7 +28,10 @@ from typing import Dict, Any, Optional, List, Tuple
 import psutil
 
 from .proto_parser import parse_build_progress, BuildProgress
-from .rom_detector import parse_soong_log, detect_rom_from_tree, detect_rom_name_from_string, get_rom_avatar
+from .rom_detector import (
+    DEFAULT_AVATAR, parse_soong_log, detect_rom_from_tree,
+    detect_rom_from_product, get_rom_avatar,
+)
 from .user_detector import resolve_user_profile, load_global_config, find_username_by_chat_id
 from .ogpreview import build_ogpreview_url
 from .artifacts import discover_artifacts, format_file_size
@@ -145,7 +148,7 @@ class BuildSession:
         if selected_product and selected_product not in ("aosp", "generic"):
             self.rom_info["product"] = selected_product
             self.rom_info["device"] = self.selected_device or selected_product.rsplit("_", 1)[-1]
-            selected_rom = detect_rom_name_from_string(selected_product)
+            selected_rom = detect_rom_from_product(selected_product)
             if selected_rom:
                 self.rom_info["rom"] = selected_rom
 
@@ -156,8 +159,9 @@ class BuildSession:
         self.release = self.rom_info.get("release", "unknown")
 
         # Avatar resolution
+        rom_avatar = get_rom_avatar(self.rom_title)
         user_avatar = self.user_profile.get("avatar")
-        self.avatar_url = user_avatar or get_rom_avatar(self.rom_title)
+        self.avatar_url = rom_avatar or user_avatar or DEFAULT_AVATAR
 
         # Telegram tracking
         self.message_id: Optional[int] = None
@@ -175,15 +179,18 @@ class BuildSession:
         if self.selected_product and self.selected_product not in ("aosp", "generic"):
             fresh["product"] = self.selected_product
             fresh["device"] = self.selected_device or self.selected_product.rsplit("_", 1)[-1]
-            selected_rom = detect_rom_name_from_string(self.selected_product)
+            selected_rom = detect_rom_from_product(self.selected_product)
             if selected_rom:
                 fresh["rom"] = selected_rom
         if fresh.get("device") and fresh.get("device") not in ["generic", "_DIR"]:
             self.device = fresh.get("device")
         if fresh.get("rom") and fresh.get("rom") not in ["AOSP", "generic"]:
             self.rom_title = fresh.get("rom")
-            if not self.user_profile.get("avatar"):
-                self.avatar_url = get_rom_avatar(self.rom_title)
+            self.avatar_url = (
+                get_rom_avatar(self.rom_title)
+                or self.user_profile.get("avatar")
+                or DEFAULT_AVATAR
+            )
         if fresh.get("variant"):
             self.variant = fresh.get("variant")
         if fresh.get("type"):

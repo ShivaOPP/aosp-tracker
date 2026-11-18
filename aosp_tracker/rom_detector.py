@@ -73,7 +73,7 @@ ROM_AVATARS = {
     "aosp": "https://avatars.githubusercontent.com/u/81792437?v=4",
 }
 
-DEFAULT_AVATAR = "https://avatars.githubusercontent.com/u/81792437?v=4"
+DEFAULT_AVATAR = "https://github.com/aosp-mirror.png"
 
 # Name aliases and GitHub owners used by the community ROM index. Keep aliases
 # explicit so words such as "mist", "alpha", or "pixel" do not match unrelated
@@ -106,7 +106,9 @@ ROM_ALIASES = {
     "ParanoidAndroid": ("aospa", "paranoidandroid", "paranoid"),
     "ArrowOS": ("arrowos",),
     "Havoc-OS": ("havoc-os", "havocos"),
-    "LineageOS": ("lineageos", "lineage"),
+    # `lineage_<device>` is a generic lunch product used by several ROM forks.
+    # Only the explicit `lineageos` token identifies LineageOS itself.
+    "LineageOS": ("lineageos",),
     "Alch3myOS": ("alch3myos",),
     "Altair ROM": ("altairrom",),
     "AresOS": ("aresos-aosp", "aresos"),
@@ -183,19 +185,26 @@ def _catalog_match(value: str) -> Optional[str]:
     return None
 
 
-def get_rom_avatar(rom_name: str) -> str:
-    """Resolve the avatar URL for a given ROM name."""
-    clean = rom_name.lower().replace(" ", "").replace("_", "").replace("-", "")
+def get_rom_avatar(rom_name: str) -> Optional[str]:
+    """Resolve a ROM avatar by exact normalized name, avoiding cross-ROM matches."""
+    clean = _compact(rom_name)
     for key, url in ROM_AVATARS.items():
-        k_clean = key.lower().replace(" ", "").replace("_", "").replace("-", "")
-        if k_clean in clean or clean in k_clean:
+        if _compact(key) == clean:
             return url
-    return DEFAULT_AVATAR
+    return None
 
 
 def detect_rom_name_from_string(s: str) -> Optional[str]:
     """Resolve a ROM using known project names and repository owner aliases."""
     return _catalog_match(s)
+
+
+def detect_rom_from_product(product: str) -> Optional[str]:
+    """Detect ROMs from lunch products without mistaking generic lineage targets."""
+    value = str(product or "").strip().lower()
+    if re.fullmatch(r"lineage_[a-z0-9][a-z0-9_-]*", value):
+        return None
+    return detect_rom_name_from_string(product)
 
 
 def detect_rom_from_tree(build_dir: str) -> Optional[str]:
