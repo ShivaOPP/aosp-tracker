@@ -220,7 +220,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         monitor.telegram.send_message.return_value = 10
         completed = asyncio.Event()
         def edit(**kwargs):
-            if "Release ready" in kwargs["text"]:
+            if "UPLOAD COMPLETE" in kwargs["text"]:
                 monitor.loop.call_soon_threadsafe(completed.set)
             return True
         monitor.telegram.edit_message.side_effect = edit
@@ -245,7 +245,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
                 selected, host, config = put.call_args.args
                 self.assertEqual(host, "fuckingfast")
                 self.assertEqual(selected["files_to_upload"], [release.name])
-                self.assertIn("FuckingFast.net", monitor.telegram.edit_message.call_args.kwargs["text"])
+                self.assertIn("FUCKINGFAST.NET", monitor.telegram.edit_message.call_args.kwargs["text"])
 
     async def test_worker_receives_selected_provider_and_its_own_id(self):
         monitor = make_monitor()
