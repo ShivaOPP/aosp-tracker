@@ -198,6 +198,14 @@ an active transfer. The node runs up to two manually requested transfers at once
 | GoFile | Selected artifacts in one folder | Existing configuration |
 | [Pixeldrain](https://pixeldrain.com/api) | Main release package | Set `PIXELDRAIN_API_KEY` |
 | [FuckingFast.net](https://fuckingfast.net/developers) | Main release package | Anonymous raw PUT |
+| [Storage.to](https://storage.to/docs/api) | Main release package, up to 25 GB | Anonymous API; multipart uploads above 50 MB |
+| [SendIt.sh](https://sendit.sh/) | Main release package, up to 10 GB | Anonymous PUT; links have service retention limits |
+| [Temp.sh](https://temp.sh/) | Main release package, up to 4 GB | Anonymous multipart upload |
+| [X0.at](https://x0.at/) | Packages up to 1 GiB | Anonymous multipart upload |
+| [QURL.sh](https://qurl.sh/) | Packages up to 500 MB | Anonymous PUT |
+| [Transfer (Whalebone)](https://transfer.whalebone.io/) | Packages up to 250 MB | Anonymous PUT |
+| [Uguu.se](https://uguu.se/) | Packages up to 128 MB | Anonymous multipart upload |
+| [TmpFiles.org](https://tmpfiles.org/) | Packages up to 100 MB | Anonymous multipart upload |
 
 Install this revision on the Telegram primary and each uploading worker with
 `sudo ./setup.sh` from its checkout. Setup preserves the existing JSON config.
@@ -213,7 +221,20 @@ The bot shows the Pixeldrain button when the node has a key.
 aosp-tracker roms
 aosp-tracker upload rom_0 --provider fuckingfast
 aosp-tracker upload rom_0 --provider pixeldrain
+aosp-tracker upload rom_0 --provider storage_to
+aosp-tracker upload rom_0 --provider sendit
 ```
+
+The bot lists package hosts according to the package size and the upload
+capabilities of its build node. Some free hosts retain files only briefly or
+limit downloads. BuzzHeavier, BashUpload, Catbox/Litterbox and pomf.lain.la
+did not pass the live upload check in this environment, so they are not offered.
+`file.io` no longer provides its former anonymous upload API, `oshi.at` was
+unreachable, and `Plowshare` is a client for other file hosts rather than a
+host. `0x0.st` prohibits automated build artifacts/backups. The remaining
+services from the original list did not provide a sufficiently verified,
+appropriate ROM-upload route. Send.vis.ee was not live-upload tested, so it is
+not offered either.
 
 Repeated library requests share a 20-second cache. **Refresh library** requests
 a fresh scan. Status and health requests run independently of catalog scans.

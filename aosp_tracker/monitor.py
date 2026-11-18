@@ -66,7 +66,7 @@ from .formatter import (
 )
 from .rom_scanner import scan_all_roms
 from .gofile import upload_artifacts_batch
-from .upload import HOSTS, package_path, pixeldrain_key, select_artifacts, upload_release
+from .upload import HOSTS, package_path, package_hosts as get_package_hosts, select_artifacts, upload_release
 
 logger = logging.getLogger("aosp_tracker.monitor")
 
@@ -1832,10 +1832,12 @@ class AospMonitor:
             r_copy["server_name"] = s_name
             identity = [s_name, r.get("type"), r.get("directory"), r.get("main_zip_name"), r.get("device")]
             r_copy["id"] = "rel_" + hashlib.blake2s(json.dumps(identity).encode(), digest_size=10).hexdigest()
-            if package_path(r):
-                r_copy["package_hosts"] = ["fuckingfast"]
-                if pixeldrain_key(self.global_config):
-                    r_copy["package_hosts"].append("pixeldrain")
+            package = package_path(r)
+            if package:
+                r_copy["package_hosts"] = get_package_hosts(
+                    self.global_config, os.path.getsize(package),
+                    include_pixeldrain=bool(r_copy.get("worker_id"))
+                )
             results.append(r_copy)
         return results
 
