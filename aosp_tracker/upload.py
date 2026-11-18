@@ -34,6 +34,9 @@ HOSTS = {
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 MAX_FILE_BYTES = {
+    "storage_to": 25_000_000_000,
+    "sendit": 10_000_000_000,
+    "temp_sh": 4_000_000_000,
     "x0at": GIB,
     "qurl": 500 * MIB,
     "whalebone": 250 * MIB,
@@ -44,9 +47,9 @@ MAX_FILE_BYTES = {
 
 def package_hosts(config, size_bytes, include_pixeldrain=True):
     """Return usable package hosts for this node and file size."""
-    result = ["fuckingfast", "storage_to", "sendit", "temp_sh"]
-    result.append("pixeldrain")
-    result.extend(provider for provider, limit in MAX_FILE_BYTES.items() if size_bytes <= limit)
+    result = ["fuckingfast", "pixeldrain"]
+    result.extend(provider for provider, limit in MAX_FILE_BYTES.items()
+                  if size_bytes <= limit)
     return result
 
 
