@@ -66,7 +66,10 @@ from .formatter import (
 )
 from .rom_scanner import scan_all_roms
 from .gofile import upload_artifacts_batch
-from .upload import HOSTS, package_path, package_hosts as get_package_hosts, select_artifacts, upload_release
+from .upload import (
+    HOSTS, package_path, package_hosts as get_package_hosts,
+    pixeldrain_key as get_pixeldrain_key, save_pixeldrain_key, select_artifacts, upload_release,
+)
 
 logger = logging.getLogger("aosp_tracker.monitor")
 
@@ -274,6 +277,7 @@ class AospMonitor:
         self.cached_multi_roms: List[Dict[str, Any]] = []
         self.upload_slots = asyncio.Semaphore(2)
         self.pending_uploads = set()
+        self.pending_pixeldrain_keys: Dict[str, Dict[str, Any]] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Telegram polling offset
@@ -1830,6 +1834,7 @@ class AospMonitor:
         for r in roms:
             r_copy = dict(r)
             r_copy["server_name"] = s_name
+            r_copy["pixeldrain_available"] = bool(get_pixeldrain_key(self.global_config))
             identity = [s_name, r.get("type"), r.get("directory"), r.get("main_zip_name"), r.get("device")]
             r_copy["id"] = "rel_" + hashlib.blake2s(json.dumps(identity).encode(), digest_size=10).hexdigest()
             package = package_path(r)
@@ -1881,11 +1886,19 @@ class AospMonitor:
         all_roms = [rom for catalog in catalogs for rom in catalog]
         return all_roms
 
-    def handle_remote_upload_request(self, device: str, chat_id: str, rom_id: Optional[str] = None, mode: str = "all", provider: str = "gofile") -> Dict[str, Any]:
+    def handle_remote_upload_request(self, device: str, chat_id: str, rom_id: Optional[str] = None,
+                                     mode: str = "all", provider: str = "gofile",
+                                     pixeldrain_key_value: Optional[str] = None) -> Dict[str, Any]:
         """Triggered via HTTP API from peer server to start a GoFile upload of local artifacts."""
         try:
             if provider not in HOSTS or mode not in ("pkg", "all", "boot", "zip"):
                 return {"success": False, "message": "Unknown host or artifact selection"}
+            if provider == "pixeldrain":
+                if pixeldrain_key_value:
+                    save_pixeldrain_key(pixeldrain_key_value)
+                    self.global_config["pixeldrain_api_key"] = pixeldrain_key_value
+                elif not get_pixeldrain_key(self.global_config):
+                    return {"success": False, "message": "Pixeldrain API key is not configured on this worker."}
             roms = self.get_local_roms()
             target_rom = None
             if rom_id:
@@ -1945,6 +1958,79 @@ class AospMonitor:
             return {"success": True, "message": "Upload cancelled"}
         return {"success": False, "message": "Upload not found"}
 
+    async def _request_pixeldrain_key(self, user_id: str, prompt_chat_id: str, context: Dict[str, Any]):
+        if user_id not in self.admin_ids:
+            await asyncio.to_thread(self.telegram.send_message, prompt_chat_id,
+                                    "Only bot admins can configure Pixeldrain uploads.")
+            return
+        self.pending_pixeldrain_keys[user_id] = {
+            **context,
+            "expires_at": time.time() + 600,
+        }
+        prompt_id = await asyncio.to_thread(
+            self.telegram.send_message,
+            user_id,
+            "🔐 Send your Pixeldrain API key in this private chat within 10 minutes. "
+            "I’ll delete your key message after saving it on the upload server.",
+            reply_markup={"force_reply": True, "input_field_placeholder": "Pixeldrain API key"},
+        )
+        if not prompt_id:
+            self.pending_pixeldrain_keys.pop(user_id, None)
+            await asyncio.to_thread(self.telegram.send_message, prompt_chat_id,
+                                    "Open a private chat with this bot and press Start, then select Pixeldrain again.")
+            return
+        self.pending_pixeldrain_keys[user_id]["prompt_message_id"] = prompt_id
+        if str(prompt_chat_id) != user_id:
+            await asyncio.to_thread(self.telegram.send_message, prompt_chat_id,
+                                    "I sent you a private message to collect the Pixeldrain key securely.")
+
+    async def _accept_pixeldrain_key(self, msg: Dict[str, Any], user_id: str, key: str):
+        pending = self.pending_pixeldrain_keys.get(user_id)
+        if not pending or pending.get("expires_at", 0) < time.time():
+            self.pending_pixeldrain_keys.pop(user_id, None)
+            await asyncio.to_thread(self.telegram.delete_message, str(msg.get("chat", {}).get("id")), msg.get("message_id"))
+            return
+        if not key or len(key) > 512 or any(char.isspace() for char in key):
+            await asyncio.to_thread(self.telegram.delete_message, str(msg.get("chat", {}).get("id")), msg.get("message_id"))
+            await asyncio.to_thread(self.telegram.send_message, user_id,
+                                    "That key format looks invalid. Send the API key again as one line.")
+            return
+        self.pending_pixeldrain_keys.pop(user_id, None)
+        await asyncio.to_thread(self.telegram.delete_message, str(msg.get("chat", {}).get("id")), msg.get("message_id"))
+        prompt_id = pending.get("prompt_message_id")
+        if prompt_id:
+            await asyncio.to_thread(self.telegram.delete_message, user_id, prompt_id)
+        try:
+            if pending.get("peer_url"):
+                if not pending["peer_url"].startswith("https://"):
+                    raise ValueError("The worker API must use HTTPS before its Pixeldrain key can be sent securely.")
+                payload = {
+                    "rom_id": pending["worker_id"],
+                    "chat_id": pending["chat_id"],
+                    "device": pending.get("device", ""),
+                    "provider": "pixeldrain",
+                    "mode": pending.get("mode", "pkg"),
+                    "pixeldrain_key": key,
+                }
+                req = urllib.request.Request(
+                    pending["peer_url"] + "/api/upload",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-AOSP-Secret": pending["secret"]},
+                    method="POST",
+                )
+                result = await asyncio.to_thread(read_json, req, 15)
+                if not result.get("success"):
+                    raise ValueError(result.get("message", "The worker did not start the upload."))
+            else:
+                save_pixeldrain_key(key)
+                self.global_config["pixeldrain_api_key"] = key
+                asyncio.create_task(self.start_upload(pending["chat_id"], pending["rom"], "pixeldrain"))
+            await asyncio.to_thread(self.telegram.send_message, pending["chat_id"],
+                                    "✅ Pixeldrain key saved on the upload server. Starting the transfer.")
+        except Exception as exc:
+            await asyncio.to_thread(self.telegram.send_message, pending["chat_id"],
+                                    f"Could not start Pixeldrain upload: {html.escape(str(exc))}", parse_mode="HTML")
+
     async def handle_telegram_message(self, msg: Dict[str, Any]):
         """Handle incoming chat messages and slash commands."""
         chat = msg.get("chat", {})
@@ -1955,8 +2041,10 @@ class AospMonitor:
         text = msg.get("text", "").strip()
         user_name = from_user.get("first_name", "Developer")
 
-        # In groups or DMs, only process slash commands
+        # A requested Pixeldrain key is accepted only from an authorized admin in a DM.
         if not text.startswith("/"):
+            if chat_type == "private" and from_id in self.admin_ids and from_id in self.pending_pixeldrain_keys:
+                await self._accept_pixeldrain_key(msg, from_id, text)
             return
 
         tokens = text.split()
@@ -2171,6 +2259,46 @@ class AospMonitor:
                         return
 
                 target_server = rom.get("server_name")
+                pixeldrain_needs_key = (
+                    not rom.get("pixeldrain_available", False)
+                    if "worker_id" in rom else not get_pixeldrain_key(self.global_config)
+                )
+                if provider == "pixeldrain" and pixeldrain_needs_key:
+                    requester_id = str(cb.get("from", {}).get("id", ""))
+                    if requester_id not in self.admin_ids:
+                        await asyncio.to_thread(self.telegram.answer_callback_query, cb_id,
+                                                text="Only bot admins can configure Pixeldrain uploads.", show_alert=True)
+                        return
+                    if "worker_id" in rom:
+                        matched_peer = next((peer for peer in self.peer_servers
+                                             if (peer.get("name") or peer.get("url", "")).lower() == str(target_server).lower()
+                                             or peer.get("url", "").lower() == str(target_server).lower()), None)
+                        if not matched_peer:
+                            await asyncio.to_thread(self.telegram.answer_callback_query, cb_id,
+                                                    text="Could not find the upload worker.", show_alert=True)
+                            return
+                        peer_url = matched_peer.get("url", "").rstrip("/")
+                        if peer_url.endswith("/status"):
+                            peer_url = peer_url[:-7]
+                        if not peer_url.startswith("https://"):
+                            await asyncio.to_thread(self.telegram.answer_callback_query, cb_id,
+                                                    text="Set this worker's API URL to HTTPS before sending a Pixeldrain key.",
+                                                    show_alert=True)
+                            return
+                        key_context = {
+                            "peer_url": peer_url,
+                            "secret": matched_peer.get("secret_key") or matched_peer.get("secret") or self.secret_key,
+                            "worker_id": rom.get("worker_id", rom_id),
+                            "device": rom.get("device", ""),
+                            "chat_id": chat_id,
+                            "mode": upload_mode,
+                        }
+                    else:
+                        key_context = {"rom": select_artifacts(rom, upload_mode), "chat_id": chat_id}
+                    await asyncio.to_thread(self.telegram.answer_callback_query, cb_id,
+                                            text="Pixeldrain needs an API key. Check your private chat.")
+                    await self._request_pixeldrain_key(requester_id, chat_id, key_context)
+                    return
                 # If target server is a peer server, delegate the upload to the peer
                 if provider != "gofile" and provider not in rom.get("package_hosts", []):
                     await asyncio.to_thread(self.telegram.answer_callback_query, cb_id, text="Host unavailable on this node.", show_alert=True)

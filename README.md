@@ -215,7 +215,10 @@ advertises its available package hosts to the primary.
 For Pixeldrain, place `PIXELDRAIN_API_KEY=your-key` in a root-owned, mode-0600
 `/etc/aosp_bot/upload.env` on the uploading node, then restart
 `aosp-tracker.service`. The CLI reads the variable from its own environment.
-The bot shows the Pixeldrain button when the node has a key.
+If an admin selects Pixeldrain before a key is configured, the bot requests the
+key in that admin's private chat, deletes the submitted message, and stores the
+key in the uploading node's root-only upload environment file. For a worker
+upload, the worker API URL must use HTTPS and the shared API secret must be set.
 
 ```bash
 aosp-tracker roms

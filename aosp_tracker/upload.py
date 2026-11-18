@@ -45,8 +45,7 @@ MAX_FILE_BYTES = {
 def package_hosts(config, size_bytes, include_pixeldrain=True):
     """Return usable package hosts for this node and file size."""
     result = ["fuckingfast", "storage_to", "sendit", "temp_sh"]
-    if include_pixeldrain and pixeldrain_key(config):
-        result.append("pixeldrain")
+    result.append("pixeldrain")
     result.extend(provider for provider, limit in MAX_FILE_BYTES.items() if size_bytes <= limit)
     return result
 
@@ -70,6 +69,25 @@ def select_artifacts(rom, mode):
 
 def pixeldrain_key(config):
     return os.environ.get("PIXELDRAIN_API_KEY") or config.get("pixeldrain_api_key")
+
+
+def save_pixeldrain_key(key, env_path="/etc/aosp_bot/upload.env"):
+    """Persist a Pixeldrain key in a root-readable systemd environment file."""
+    key = str(key).strip()
+    if not key or len(key) > 512 or any(char.isspace() for char in key):
+        raise ValueError("Invalid Pixeldrain API key format.")
+    os.makedirs(os.path.dirname(env_path), mode=0o700, exist_ok=True)
+    try:
+        with open(env_path, "r", encoding="utf-8") as source:
+            lines = source.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    lines = [line for line in lines if not line.startswith("PIXELDRAIN_API_KEY=")]
+    lines.append("PIXELDRAIN_API_KEY=" + key)
+    fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as destination:
+        destination.write("\n".join(lines) + "\n")
+    os.chmod(env_path, 0o600)
 
 
 def share_url(provider, body):

@@ -109,15 +109,20 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                     rom_id = body_json.get("rom_id")
                     mode = body_json.get("mode", "all")
                     provider = body_json.get("provider", "gofile")
-                    args = [device, chat_id, rom_id, mode, provider]
+                    pixeldrain_key = body_json.get("pixeldrain_key")
+                    if pixeldrain_key and (provider != "pixeldrain" or not self.expected_secret):
+                        self.send_json_response({"success": False, "message": "Secure Pixeldrain worker authorization is not configured."}, 400)
+                        return
+                    args = [device, chat_id, rom_id, mode, provider, pixeldrain_key]
                     signature = inspect.signature(self.start_upload_callback)
                     # Older callbacks support only GoFile and may omit the artifact mode.
-                    for count in (5, 4, 3):
+                    for count in (6, 5, 4, 3):
                         try:
                             signature.bind(*args[:count])
                         except TypeError:
                             continue
-                        if (count < 5 and provider != "gofile") or (count < 4 and mode != "all"):
+                        if ((count < 5 and provider != "gofile") or (count < 4 and mode != "all")
+                                or (provider == "pixeldrain" and pixeldrain_key and count < 6)):
                             self.send_json_response({"success": False, "message": "Unsupported upload selection"}, 400)
                             return
                         res = self.start_upload_callback(*args[:count])
