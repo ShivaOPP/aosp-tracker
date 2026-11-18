@@ -42,12 +42,17 @@ def share_url(provider, body):
         if isinstance(file_id, str) and data.get("success") and re.fullmatch(r"[A-Za-z0-9_-]+", file_id):
             return "https://pixeldrain.com/u/" + file_id
     else:
-        # The PUT endpoint returns a public link. Accept a URL or a JSON envelope.
+        # Current PUT responses contain file metadata. Older responses provide a URL.
         try:
             data = json.loads(body)
         except ValueError:
             data = body.strip()
         if isinstance(data, dict):
+            metadata = data.get("data")
+            if data.get("code") in (200, 201) and isinstance(metadata, dict):
+                file_id = metadata.get("id")
+                if isinstance(file_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", file_id):
+                    return "https://fuckingfast.net/" + file_id
             data = data.get("url") or data.get("link") or data.get("downloadUrl")
         if isinstance(data, str):
             url = urlsplit(data)

@@ -54,6 +54,12 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(header.strip(), b"Authorization: Basic " + base64.b64encode(b":test-key"))
         self.assertTrue(url.startswith("https://pixeldrain.com/api/file/"))
 
+    def test_fuckingfast_created_file_metadata(self):
+        body = b'{"code":201,"data":{"id":"abC123def456","isDirectory":false}}'
+        self.check_transfer("fuckingfast", body, "https://fuckingfast.net/abC123def456")
+        with self.assertRaises(ValueError):
+            upload.share_url("fuckingfast", '{"code":201,"data":{"id":"../unexpected"}}')
+
     def test_fuckingfast(self):
         header, url = self.check_transfer("fuckingfast", b"https://fuckingfast.net/file#name", "https://fuckingfast.net/file#name")
         self.assertEqual(header, b"")
