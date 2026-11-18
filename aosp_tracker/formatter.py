@@ -127,9 +127,19 @@ def format_started_timestamp(start_time_epoch: float) -> str:
 
 
 def make_progress_bar(percentage: float, length: int = 10) -> str:
-    """Construct a 10-block progress bar using █ and ░."""
+    """Create a compact visual progress meter."""
     filled = min(length, max(0, int(round((percentage / 100.0) * length))))
-    return "█" * filled + "░" * (length - filled)
+    return "▰" * filled + "▱" * (length - filled)
+
+
+def _preview_anchor(preview_url: str) -> str:
+    escaped = html.escape(preview_url, quote=True)
+    return f'<a href="{escaped}">&#8203;</a>'
+
+
+def _stat_line(label: str, used: float, total: float, unit: str, percent: float, meter_length: int = 8) -> str:
+    return (f"{label}  <code>{make_progress_bar(percent, meter_length)}</code>  "
+            f"<b>{percent:.0f}%</b> · {used:.1f}/{total:.1f} {unit}")
 
 
 def format_build_in_progress(
@@ -159,34 +169,31 @@ def format_build_in_progress(
     eta_str = format_duration(eta_seconds) if eta_seconds is not None else "Calculating..."
     actions_str = f"{finished_actions}/{total_actions}" if total_actions > 0 else "Initializing build environment..."
 
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    hidden_preview = _preview_anchor(preview_url)
 
     server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     sys_block = ""
     if system_stats:
-        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
+        disk_label = system_stats.get("disk_label") or "Storage"
         sys_block = (
-            f"💻 System Resources:\n"
-            f"  • CPU: {system_stats['cpu_pct']:.1f}%\n"
-            f"  • RAM: {system_stats['ram_used_gb']:.1f} / {system_stats['ram_total_gb']:.1f} GB ({system_stats['ram_pct']:.1f}%)\n"
-            f"  • NVMe{d_lbl}: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
+            "<b>NODE</b>\n"
+            + _stat_line("CPU", system_stats["cpu_pct"], 100, "%", system_stats["cpu_pct"]) + "\n"
+            + _stat_line("RAM", system_stats["ram_used_gb"], system_stats["ram_total_gb"], "GB", system_stats["ram_pct"]) + "\n"
+            + _stat_line(html.escape(disk_label), system_stats["disk_used_gb"], system_stats["disk_total_gb"], "GB", system_stats["disk_pct"]) + "\n\n"
         )
 
+    heading = f"<b>{html.escape(rom_title)}  /  {html.escape(device)}</b>"
+    identity = f"{html.escape(user_name)} {user_emoji}"
+    server_line = f" · {html.escape(server_name)}" if server_name else ""
     return (
-        f"{hidden_preview}⚙️ Build In Progress ({current_actions} tasks running) for {html.escape(rom_title)} on {html.escape(device)}\n"
-        f"👤 User: {html.escape(user_name)}             {user_emoji}\n"
-        f"{server_line}"
-        f"📊 Progress: [{bar}] {pct:.2f}%\n"
-        f"   Actions: {actions_str}\n"
-        f"⏳ Elapsed: {elapsed_str}\n"
-        f"⏱️ ETA: {eta_str}\n\n"
-        f"{sys_block}"
-        f"🔧 Configuration:\n"
-        f"  Variant: {html.escape(variant)}\n"
-        f"  Type: {html.escape(build_type)}\n"
-        f"  Release: {html.escape(release)}\n\n"
-        f"Optimizing for maximum developer satisfaction. Please hold. 📈"
+        f"{hidden_preview}🛠️  <b>BUILD RUNNING</b>\n{heading}\n"
+        f"{identity}{server_line}\n\n"
+        f"<code>{bar}</code>  <b>{pct:.1f}%</b>\n"
+        f"<b>{actions_str}</b> actions · {current_actions} active\n"
+        f"◷ {elapsed_str} elapsed  ·  ETA {eta_str}\n\n"
+        f"{sys_block}<b>BUILD PROFILE</b>\n"
+        f"{html.escape(variant)} · {html.escape(build_type)} · {html.escape(release)}"
     )
 
 
@@ -211,40 +218,31 @@ def format_build_completed(
     if system_stats is None:
         system_stats = get_system_stats()
 
-    started_str = format_started_timestamp(start_time_epoch)
     duration_str = format_duration(duration_seconds)
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
-
     lines = [
-        f"{hidden_preview}✅ Build Completed for {html.escape(rom_title)} on {html.escape(device)}",
-        f"User: {html.escape(user_name)}             {user_emoji}",
-    ]
-    if server_name:
-        lines.append(f"🖥️ Server: <b>{html.escape(server_name)}</b>")
-    lines.extend([
-        f"Started: {started_str}",
-        f"Duration: {duration_str}",
-        f"📊 Build Stats: {finished_actions}/{total_actions} actions",
-    ])
-
-    if system_stats:
-        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
-        lines.append(f"💾 NVMe{d_lbl} Usage: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)")
-
-    lines.extend([
-        f"🔧 Configuration:",
-        f"  • Variant: {html.escape(variant)}",
-        f"  • Type: {html.escape(build_type)}",
-        f"  • Release: {html.escape(release)}",
+        f"{_preview_anchor(preview_url)}✅  <b>BUILD COMPLETE</b>",
+        f"<b>{html.escape(rom_title)}  /  {html.escape(device)}</b>",
+        f"{html.escape(user_name)} {user_emoji}" + (f" · {html.escape(server_name)}" if server_name else ""),
         "",
-        "🎉 Build Artifact(s) Uploaded:",
-    ])
-
-    for i, art in enumerate(artifacts, 1):
-        lines.append(f"{i}. File: {html.escape(art['name'])}")
-        lines.append(f"     Type: {html.escape(art['type'])} | Size: {html.escape(art['size_formatted'])}")
-        lines.append(f"     SHA256: {html.escape(art['sha256'])}")
-
+        f"◷ {duration_str}  ·  {finished_actions:,}/{total_actions:,} actions",
+    ]
+    if system_stats:
+        disk_label = html.escape(system_stats.get("disk_label") or "Storage")
+        lines.extend(["", "<b>NODE STORAGE</b>",
+                      _stat_line(disk_label, system_stats["disk_used_gb"], system_stats["disk_total_gb"], "GB", system_stats["disk_pct"])])
+    lines.extend(["", "<b>BUILD PROFILE</b>",
+                  f"{html.escape(variant)} · {html.escape(build_type)} · {html.escape(release)}"])
+    if artifacts:
+        lines.extend(["", f"<b>ARTIFACTS  /  {len(artifacts)}</b>"])
+        for art in artifacts:
+            name = html.escape(art.get("name", "release"))
+            details = [html.escape(art.get("type", "FILE")), html.escape(art.get("size_formatted", ""))]
+            line = f"• <code>{name}</code> · {' · '.join(details)}"
+            if art.get("sha256"):
+                line += f"\n  <code>SHA-256  {html.escape(art['sha256'])}</code>"
+            lines.append(line)
+    else:
+        lines.extend(["", "Build completed. No flashable artifacts were detected."])
     return "\n".join(lines)
 
 
@@ -265,24 +263,14 @@ def format_build_failed(
     server_name: Optional[str] = None,
 ) -> str:
     """Format Build Failed Telegram message in HTML."""
-    started_str = format_started_timestamp(start_time_epoch)
-    duration_str = format_duration(duration_seconds)
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
-    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
-
+    server_line = f" · {html.escape(server_name)}" if server_name else ""
     return (
-        f"{hidden_preview}❌ Build Failed for {html.escape(rom_title)} on {html.escape(device)}\n"
-        f"User: {html.escape(user_name)}             {user_emoji}\n"
-        f"{server_line}"
-        f"Started: {started_str}\n"
-        f"Duration: {duration_str}\n"
-        f"📊 Actions: {finished_actions}/{total_actions} actions\n"
-        f"🔧 Configuration:\n"
-        f"  • Variant: {html.escape(variant)}\n"
-        f"  • Type: {html.escape(build_type)}\n"
-        f"  • Release: {html.escape(release)}\n\n"
-        f"⚠️ Error Log:\n"
-        f"<pre>{html.escape(error_summary[:1200])}</pre>"
+        f"{_preview_anchor(preview_url)}⛔  <b>BUILD STOPPED</b>\n"
+        f"<b>{html.escape(rom_title)}  /  {html.escape(device)}</b>\n"
+        f"{html.escape(user_name)} {user_emoji}{server_line}\n\n"
+        f"◷ {format_duration(duration_seconds)}  ·  {finished_actions:,}/{total_actions:,} actions\n"
+        f"<b>BUILD PROFILE</b>\n{html.escape(variant)} · {html.escape(build_type)} · {html.escape(release)}\n\n"
+        f"<b>ERROR SUMMARY</b>\n<pre>{html.escape(error_summary[:1200])}</pre>"
     )
 
 
@@ -308,31 +296,25 @@ def format_sync_in_progress(
     bar = make_progress_bar(pct)
     elapsed_str = format_duration(elapsed_seconds)
     eta_str = format_duration(eta_seconds) if eta_seconds is not None else "Calculating..."
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    hidden_preview = _preview_anchor(preview_url)
     server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     sys_block = ""
     if system_stats:
-        d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
-        sys_block = (
-            f"💻 System Resources:\n"
-            f"  • CPU: {system_stats['cpu_pct']:.1f}%\n"
-            f"  • RAM: {system_stats['ram_used_gb']:.1f} / {system_stats['ram_total_gb']:.1f} GB ({system_stats['ram_pct']:.1f}%)\n"
-            f"  • NVMe{d_lbl}: {system_stats['disk_used_gb']:.1f} / {system_stats['disk_total_gb']:.1f} GB ({system_stats['disk_pct']:.1f}%)\n\n"
-        )
+        sys_block = ("<b>NODE</b>\n"
+                     + _stat_line("CPU", system_stats["cpu_pct"], 100, "%", system_stats["cpu_pct"]) + "\n"
+                     + _stat_line("RAM", system_stats["ram_used_gb"], system_stats["ram_total_gb"], "GB", system_stats["ram_pct"]) + "\n\n")
 
+    identity = f"{html.escape(user_name)} {user_emoji}"
+    if server_name:
+        identity += f" · {html.escape(server_name)}"
     return (
-        f"{hidden_preview}🔄 Source Sync In Progress for {html.escape(rom_title)}\n"
-        f"👤 User: {html.escape(user_name)}             {user_emoji}\n"
-        f"{server_line}"
-        f"📊 Progress: [{bar}] {pct:.2f}%\n"
-        f"   Projects: {synced_projects}/{total_projects}\n"
-        f"⏳ Elapsed: {elapsed_str}\n"
-        f"⏱️ ETA: {eta_str}\n\n"
-        f"{sys_block}"
-        f"🌿 Branch: {html.escape(branch)}\n"
-        f"📦 Remote: {html.escape(remote)}\n\n"
-        f"Syncing manifest and source trees. Please hold. 📡"
+        f"{hidden_preview}🔄  <b>SOURCE SYNC</b>\n"
+        f"<b>{html.escape(rom_title)}</b> · {identity}\n\n"
+        f"<code>{bar}</code>  <b>{pct:.1f}%</b>\n"
+        f"{synced_projects:,}/{total_projects:,} projects\n"
+        f"◷ {elapsed_str} elapsed  ·  ETA {eta_str}\n\n{sys_block}"
+        f"<b>MANIFEST</b>\n{html.escape(branch)}\n{html.escape(remote)}"
     )
 
 
@@ -349,21 +331,12 @@ def format_sync_completed(
     server_name: Optional[str] = None,
 ) -> str:
     """Format Source Sync Completed Telegram message in HTML."""
-    started_str = format_started_timestamp(start_time_epoch)
-    duration_str = format_duration(duration_seconds)
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
-    server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
-
     return (
-        f"{hidden_preview}✅ Source Sync Completed for {html.escape(rom_title)}\n"
-        f"User: {html.escape(user_name)}             {user_emoji}\n"
-        f"{server_line}"
-        f"Started: {started_str}\n"
-        f"Duration: {duration_str}\n"
-        f"📊 Sync Stats: {total_projects}/{total_projects} projects synced\n"
-        f"🌿 Branch: {html.escape(branch)}\n"
-        f"📦 Remote: {html.escape(remote)}\n\n"
-        f"All repositories are up to date! 🚀"
+        f"{_preview_anchor(preview_url)}✅  <b>SOURCE SYNC COMPLETE</b>\n"
+        f"<b>{html.escape(rom_title)}</b> · {html.escape(user_name)} {user_emoji}\n"
+        f"{html.escape(server_name) + ' · ' if server_name else ''}{format_duration(duration_seconds)}\n\n"
+        f"<b>MANIFEST</b>\n{html.escape(branch)}\n{html.escape(remote)}\n\n"
+        f"{total_projects:,} projects updated"
     )
 
 
@@ -421,17 +394,17 @@ def group_roms(roms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def format_rom_catalog(groups: List[Dict[str, Any]], filter_type: Optional[str] = None) -> str:
-    """Format catalog overview of ROMs and Kernels across all servers."""
-    title = "Kernel library" if filter_type == "kernel" else "Release library"
+    """Format a compact release-library overview."""
+    title = "KERNELS" if filter_type == "kernel" else "RELEASE LIBRARY"
     if not groups:
-        return f"📦 <b>{title}</b>\n\nNo matching releases. Use /roms to browse or refresh after a build."
+        return f"◈  <b>{title}</b>\n\nNo matching releases yet. Try /search or refresh after a build."
     files = sum(g["total_files"] for g in groups)
     nodes = len({g["server_name"] for g in groups})
-    lines = [f"📦 <b>{title}</b>",
-             f"{len(groups)} releases · {files} artifacts · {nodes} {'node' if nodes == 1 else 'nodes'}",
-             "", "Choose a release to view its packages and upload options."]
+    lines = [f"◈  <b>{title}</b>",
+             f"{len(groups)} releases  ·  {files} files  ·  {nodes} nodes",
+             "", "<i>Select a release to inspect its package and mirrors.</i>"]
     if len(groups) > 25:
-        lines.append("Showing 25 releases. Use /search followed by a name or device to narrow the list.")
+        lines.append("Use /search followed by a ROM or device name to narrow the list.")
     return "\n".join(lines)
 
 
@@ -439,19 +412,16 @@ def make_rom_catalog_keyboard(groups: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Construct inline keyboard for ROM and Kernel selection with device variant counts."""
     buttons = []
     for g in groups[:25]:
-        icon = "⚡ " if g["type"] == "kernel" else "📱 "
+        icon = "⚡" if g["type"] == "kernel" else "◈"
         dev_count = len(g["devices"])
-        if dev_count > 1:
-            tag = f" ({dev_count} devices)"
-        elif dev_count == 1:
-            tag = f" ({g['devices'][0]})"
-        else:
-            tag = ""
-        srv_tag = f" • {g['server_name']}" if g.get("server_name") else ""
-        btn_text = f"{icon}{g['name']}{tag}{srv_tag}"
+        device = f" · {g['devices'][0]}" if dev_count == 1 else f" · {dev_count} devices" if dev_count > 1 else ""
+        name = g["name"]
+        if len(name) > 32:
+            name = name[:29] + "…"
+        btn_text = f"{icon} {name}{device}"
         buttons.append([{"text": btn_text, "callback_data": f"sel_grp:{g['group_id']}"}])
 
-    buttons.append([{"text": "↻ Refresh library", "callback_data": "rescan_roms"}])
+    buttons.append([{"text": "↻ Refresh", "callback_data": "rescan_roms"}])
     return {"inline_keyboard": buttons}
 
 
@@ -460,8 +430,8 @@ def format_device_selection(group: Dict[str, Any]) -> str:
     icon = "⚡" if group.get("type") == "kernel" else "📱"
     srv = f" [{html.escape(group['server_name'])}]" if group.get("server_name") else ""
     lines = [
-        f"{icon} <b>{html.escape(group['name'])}</b>{srv}\n",
-        "Please select your target device variant below:",
+        f"{icon}  <b>{html.escape(group['name'])}</b>{srv}",
+        "Choose a device package to preview its files and download options.",
     ]
     return "\n".join(lines)
 
@@ -499,21 +469,20 @@ def make_device_selection_keyboard(group: Dict[str, Any]) -> Dict[str, Any]:
 def format_rom_device_detail(rom: Dict[str, Any]) -> str:
     """Format single device build details and GoFile upload options."""
     icon = "⚡" if rom.get("type") == "kernel" else "📱"
-    dev_str = f"({rom['device']}) " if rom.get("device") and rom["device"] != "unknown" else ""
-    srv = f"[{html.escape(rom['server_name'])}]" if rom.get("server_name") else ""
-
+    server = f" · {html.escape(rom['server_name'])}" if rom.get("server_name") else ""
+    size = html.escape(str(rom.get("total_size_formatted", "")))
+    count = rom.get("file_count", 0)
     lines = [
-        f"{icon} <b>{html.escape(rom['name'])}</b> {html.escape(dev_str)}{srv}\n",
-        f"• <b>Device:</b> <code>{html.escape(rom.get('device', 'unknown'))}</code>",
-        f"• <b>Package:</b> <code>{html.escape(rom.get('main_zip_name', ''))}</code>",
-        f"• <b>Total Size:</b> {rom.get('total_size_formatted', '')} ({rom.get('file_count', 0)} artifacts)",
+        f"{icon}  <b>{html.escape(rom['name'])}</b>",
+        f"{html.escape(rom.get('device', 'unknown'))}{server}",
+        "",
+        "<b>PACKAGE</b>",
+        f"<code>{html.escape(rom.get('main_zip_name', 'No ZIP package'))}</code>",
+        f"{size}  ·  {count} artifacts",
     ]
     if rom.get("directory"):
-        lines.append(f"• <b>Directory:</b> <code>{html.escape(rom['directory'])}</code>")
-    if rom.get("package_hosts"):
-        lines.append("\nChoose a host for the main package, or send an artifact set to GoFile.")
-    else:
-        lines.append("\nChoose the artifacts to send to GoFile.")
+        lines.append(f"<code>{html.escape(rom['directory'])}</code>")
+    lines.extend(["", "Choose a mirror or artifact set below."])
     return "\n".join(lines)
 
 
@@ -527,7 +496,7 @@ def make_rom_device_keyboard(rom: Dict[str, Any], back_callback: str = "rescan_r
     has_boot = any(p.endswith((".img", ".bin")) for p in upload_files)
 
     buttons = [
-        [{"text": f"GoFile · All artifacts ({file_count})", "callback_data": f"dl:{rom_id}:all"}]
+        [{"text": f"↑  GoFile  ·  All files ({file_count})", "callback_data": f"dl:{rom_id}:all"}]
     ]
     hosts = rom.get("package_hosts", [])
     mirrors = [{"text": label, "callback_data": f"dl:{rom_id}:pkg:{provider}"}
@@ -535,12 +504,12 @@ def make_rom_device_keyboard(rom: Dict[str, Any], back_callback: str = "rescan_r
                if provider in hosts]
     if mirrors:
         buttons.insert(0, mirrors)
-    if has_zip and file_count > 1:
-        buttons.append([{"text": "GoFile · ZIP only", "callback_data": f"dl:{rom_id}:zip"}])
+    if has_zip:
+        buttons.append([{"text": "GoFile  ·  ZIP only", "callback_data": f"dl:{rom_id}:zip"}])
     if has_boot and file_count > 1:
-        buttons.append([{"text": "GoFile · Images", "callback_data": f"dl:{rom_id}:boot"}])
+        buttons.append([{"text": "GoFile  ·  Boot images", "callback_data": f"dl:{rom_id}:boot"}])
 
-    buttons.append([{"text": "🔙 Back", "callback_data": back_callback}])
+    buttons.append([{"text": "‹  Back", "callback_data": back_callback}])
     return {"inline_keyboard": buttons}
 
 
@@ -577,10 +546,11 @@ def format_gofile_upload_progress(
     trans_str = format_file_size(transferred_bytes)
     total_str = format_file_size(total_bytes)
     lines = [
-        f"↑ <b>{html.escape(host)} transfer</b>",
-        f"{html.escape(rom_name)}{dev_str}\n",
+        f"◉  <b>{html.escape(host).upper()}  /  UPLOAD</b>",
+        f"<b>{html.escape(rom_name)}</b>{dev_str}",
+        "",
         f"<code>{bar}</code>  <b>{pct_clamped:.1f}%</b>",
-        f"{trans_str} / {total_str} · {completed_files}/{total_files} files",
+        f"{trans_str} / {total_str}  ·  {completed_files}/{total_files} files",
     ]
     if speed_mb_s > 0:
         rate = f"{speed_mb_s:.1f} MB/s"
@@ -608,9 +578,9 @@ def format_gofile_upload_completed(
     total_str = format_file_size(total_bytes) if total_bytes > 0 else ""
 
     lines = [
-        f"✓ <b>Release ready · {html.escape(host)}</b>\n",
-        f"📱 <b>ROM:</b> {html.escape(rom_name)}{dev_str}",
-        f'🔗 <a href="{html.escape(download_url, quote=True)}">Open download</a>',
+        f"◈  <b>UPLOAD COMPLETE  /  {html.escape(host).upper()}</b>",
+        f"<b>{html.escape(rom_name)}</b>{dev_str}",
+        f'↗  <a href="{html.escape(download_url, quote=True)}">Open release</a>',
     ]
 
     if duration_seconds is not None and duration_seconds > 0:
@@ -621,7 +591,7 @@ def format_gofile_upload_completed(
         lines.append(f"⚡ <b>Average Speed:</b> {avg_speed_mb_s:.1f} MB/s")
 
     size_tag = f", {total_str}" if total_str else ""
-    lines.append(f"\n📦 <b>Uploaded Artifacts ({len(uploaded_files)} files{size_tag}):</b>")
+    lines.append(f"\n<b>FILES  /  {len(uploaded_files)}{size_tag}</b>")
 
     for idx, f in enumerate(uploaded_files, 1):
         icon = "📁" if f["name"].endswith(".zip") else ("💿" if f["name"].endswith(".img") else "📄")
@@ -692,7 +662,7 @@ def format_kernel_build_in_progress(
     bar = make_progress_bar(pct)
     elapsed_str = format_duration(elapsed_seconds)
     eta_str = format_duration(eta_seconds) if eta_seconds is not None else "Calculating..."
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    hidden_preview = _preview_anchor(preview_url)
     server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
     sys_block = ""
@@ -752,7 +722,7 @@ def format_kernel_build_completed(
 
     started_str = format_started_timestamp(start_time_epoch)
     duration_str = format_duration(duration_seconds)
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    hidden_preview = _preview_anchor(preview_url)
     dev_label = html.escape(device)
 
     lines = [
@@ -810,7 +780,7 @@ def format_kernel_build_failed(
     """Format Kernel Build Failed message in HTML."""
     started_str = format_started_timestamp(start_time_epoch)
     duration_str = format_duration(duration_seconds)
-    hidden_preview = f'<a href="{preview_url}">&#8203;</a>'
+    hidden_preview = _preview_anchor(preview_url)
     dev_label = html.escape(device)
     server_line = f"🖥️ Server: <b>{html.escape(server_name)}</b>\n" if server_name else ""
 
@@ -836,7 +806,7 @@ def make_kernel_completed_keyboard(download_url: Optional[str] = None) -> Dict[s
     if download_url:
         buttons.append([
             {
-                "text": f"↗ Open {host}",
+                "text": "↗ Open kernel release",
                 "url": download_url,
             }
         ])
@@ -866,14 +836,15 @@ def format_server_status_block(
             f"  ⚠️ <i>{html.escape(err_msg)}</i>"
         )
 
-    lines = [f"🖥️ <b>{html.escape(server_name)}</b> 🟢"]
+    lines = [f"🟢  <b>{html.escape(server_name)}</b>  /  <i>ONLINE</i>"]
     if system_stats:
         d_lbl = f" ({system_stats['disk_label']})" if system_stats.get("disk_label") else ""
         lines.extend([
-            f"💻 <b>System Resources:</b>",
-            f"  • CPU: {system_stats.get('cpu_pct', 0.0):.1f}%",
-            f"  • RAM: {system_stats.get('ram_used_gb', 0.0):.1f} / {system_stats.get('ram_total_gb', 0.0):.1f} GB ({system_stats.get('ram_pct', 0.0):.1f}%)",
-            f"  • NVMe{d_lbl}: {system_stats.get('disk_used_gb', 0.0):.1f} / {system_stats.get('disk_total_gb', 0.0):.1f} GB ({system_stats.get('disk_pct', 0.0):.1f}%)\n",
+            f"<b>NODE  /  RESOURCES</b>",
+            _stat_line("CPU", system_stats.get("cpu_pct", 0.0), 100, "%", system_stats.get("cpu_pct", 0.0)),
+            _stat_line("RAM", system_stats.get("ram_used_gb", 0.0), system_stats.get("ram_total_gb", 0.0), "GB", system_stats.get("ram_pct", 0.0)),
+            _stat_line(f"NVMe{html.escape(d_lbl)}", system_stats.get("disk_used_gb", 0.0), system_stats.get("disk_total_gb", 0.0), "GB", system_stats.get("disk_pct", 0.0)),
+            "",
         ])
 
     active_build_count = len(builds)
@@ -910,7 +881,7 @@ def format_server_status_block(
 
 def format_multi_server_status(servers: List[Dict[str, Any]]) -> str:
     """Format combined status across multiple servers."""
-    header = f"◉ <b>Build fleet</b>  ·  {sum(s.get('online', True) for s in servers)}/{len(servers)} online\n"
+    header = f"◈  <b>BUILD FLEET</b>  ·  {sum(s.get('online', True) for s in servers)}/{len(servers)} online\n"
     blocks = []
     for s in servers:
         block = format_server_status_block(
@@ -927,7 +898,7 @@ def format_multi_server_status(servers: List[Dict[str, Any]]) -> str:
             block += f"\nLast response · {last_seen:%d %b %H:%M UTC}"
         blocks.append(block)
 
-    body = "\n\n────────────────────\n\n".join(blocks)
-    footer = "\n\n💡 <i>Send /roms or /kernels to browse releases.</i>"
+    body = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(blocks)
+    footer = "\n\n<i>Browse releases with /roms · /kernels · /search</i>"
     return f"{header}\n{body}{footer}"
 
