@@ -70,9 +70,11 @@ Duration: 26 minutes, 41 seconds
 
 ## Installation & Setup
 
-Run the setup script with sudo:
+Run the setup script from your checkout on the build server:
+
 ```bash
-cd /home/ubuntu/aosp-tracker
+git clone https://github.com/ShivaOPP/aosp-tracker.git
+cd aosp-tracker
 sudo ./setup.sh
 ```
 
@@ -245,3 +247,14 @@ Repeated library requests share a 20-second cache. **Refresh library** requests
 a fresh scan. Status and health requests run independently of catalog scans.
 If a worker stops responding, `/status` reports its last successful status
 response observed since the primary started, when available.
+
+
+## Running the tests
+
+From the repository root, run:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The release-flow tests use mocks for uploads and Telegram calls.
